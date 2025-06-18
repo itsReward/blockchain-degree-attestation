@@ -1,0 +1,365 @@
+# docker-compose.yml
+version: '3.8'
+
+networks:
+  degree-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  fabric-peer-data:
+  fabric-orderer-data:
+  fabric-ca-data:
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: degree-postgres
+    environment:
+      POSTGRES_DB: degree_attestation
+      POSTGRES_USER: degree_user
+      POSTGRES_PASSWORD: degree_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: degree-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Hyperledger Fabric CA
+  ca.attestation.degreechain.org:
+    image: hyperledger/fabric-ca:latest
+    container_name: ca-attestation
+    environment:
+      FABRIC_CA_HOME: /etc/hyperledger/fabric-ca-server
+      FABRIC_CA_SERVER_CA_NAME: ca-attestation
+      FABRIC_CA_SERVER_TLS_ENABLED: true
+      FABRIC_CA_SERVER_PORT: 7054
+    ports:
+      - "7054:7054"
+    command: sh -c 'fabric-ca-server start -b admin:adminpw -d'
+    volumes:
+      - fabric-ca-data:/etc/hyperledger/fabric-ca-server
+    networks:
+      - degree-network
+
+  # Hyperledger Fabric Orderer
+  orderer.degreechain.org:
+    image: hyperledger/fabric-orderer:latest
+    container_name: orderer
+    environment:
+      FABRIC_LOGGING_SPEC: INFO
+      ORDERER_GENERAL_LISTENADDRESS: 0.0.0.0
+      ORDERER_GENERAL_BOOTSTRAPMETHOD: file
+      ORDERER_GENERAL_BOOTSTRAPFILE: /var/hyperledger/orderer/orderer.genesis.block
+      ORDERER_GENERAL_LOCALMSPID: OrdererMSP
+      ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/orderer/msp
+      ORDERER_GENERAL_TLS_ENABLED: true
+      ORDERER_GENERAL_TLS_PRIVATEKEY: /var/hyperledger/orderer/tls/server.key
+      ORDERER_GENERAL_TLS_CERTIFICATE: /var/hyperledger/orderer/tls/server.crt
+      ORDERER_GENERAL_TLS_ROOTCAS: '[/var/hyperledger/orderer/tls/ca.crt]'
+      ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE: /var/hyperledger/orderer/tls/server.crt
+      ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY: /var/hyperledger/orderer/tls/server.key
+      ORDERER_GENERAL_CLUSTER_ROOTCAS: '[/var/hyperledger/orderer/tls/ca.crt]'
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric
+    command: orderer
+    volumes:
+      - ./fabric-network/channel-artifacts/genesis.block:/var/hyperledger/orderer/orderer.genesis.block
+      - ./fabric-network/organizations/orderer/orderer.degreechain.org/msp:/var/hyperledger/orderer/msp
+      - ./fabric-network/organizations/orderer/orderer.degreechain.org/tls/:/var/hyperledger/orderer/tls
+      - fabric-orderer-data:/var/hyperledger/production/orderer
+    ports:
+      - "7050:7050"
+    networks:
+      - degree-network
+
+  # Attestation Authority Peer
+  peer0.attestation.degreechain.org:
+    image: hyperledger/fabric-peer:latest
+    container_name: peer0-attestation
+    environment:
+      CORE_VM_ENDPOINT: unix:///host/var/run/docker.sock
+      CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE: blockchain-degree-attestation_degree-network
+      FABRIC_LOGGING_SPEC: INFO
+      CORE_PEER_TLS_ENABLED: true
+      CORE_PEER_PROFILE_ENABLED: true
+      CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
+      CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
+      CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/tls/ca.crt
+      CORE_PEER_ID: peer0.attestation.degreechain.org
+      CORE_PEER_ADDRESS: peer0.attestation.degreechain.org:7051
+      CORE_PEER_LISTENADDRESS: 0.0.0.0:7051
+      CORE_PEER_CHAINCODEADDRESS: peer0.attestation.degreechain.org:7052
+      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:7052
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.attestation.degreechain.org:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.attestation.degreechain.org:7051
+      CORE_PEER_LOCALMSPID: AttestationMSP
+      CORE_OPERATIONS_LISTENADDRESS: 0.0.0.0:17051
+      CORE_LEDGER_STATE_STATEDATABASE: CouchDB
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb0:5984
+      CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME: admin
+      CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD: adminpw
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: peer node start
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations/peerOrganizations/attestation.degreechain.org/peers/peer0.attestation.degreechain.org/msp:/etc/hyperledger/fabric/msp
+      - ./fabric-network/organizations/peerOrganizations/attestation.degreechain.org/peers/peer0.attestation.degreechain.org/tls:/etc/hyperledger/fabric/tls
+      - fabric-peer-data:/var/hyperledger/production
+    ports:
+      - "7051:7051"
+      - "17051:17051"
+    depends_on:
+      - couchdb0
+    networks:
+      - degree-network
+
+  # CouchDB for Attestation Peer
+  couchdb0:
+    image: couchdb:3.3
+    container_name: couchdb0
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: adminpw
+    ports:
+      - "5984:5984"
+    networks:
+      - degree-network
+
+  # University Peer
+  peer0.university.degreechain.org:
+    image: hyperledger/fabric-peer:latest
+    container_name: peer0-university
+    environment:
+      CORE_VM_ENDPOINT: unix:///host/var/run/docker.sock
+      CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE: blockchain-degree-attestation_degree-network
+      FABRIC_LOGGING_SPEC: INFO
+      CORE_PEER_TLS_ENABLED: true
+      CORE_PEER_PROFILE_ENABLED: true
+      CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
+      CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
+      CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/tls/ca.crt
+      CORE_PEER_ID: peer0.university.degreechain.org
+      CORE_PEER_ADDRESS: peer0.university.degreechain.org:9051
+      CORE_PEER_LISTENADDRESS: 0.0.0.0:9051
+      CORE_PEER_CHAINCODEADDRESS: peer0.university.degreechain.org:9052
+      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:9052
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.university.degreechain.org:9051
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.university.degreechain.org:9051
+      CORE_PEER_LOCALMSPID: UniversityMSP
+      CORE_OPERATIONS_LISTENADDRESS: 0.0.0.0:19051
+      CORE_LEDGER_STATE_STATEDATABASE: CouchDB
+      CORE_LEDGER_STATE_COUCHDBCONFIG_COUCHDBADDRESS: couchdb1:5984
+      CORE_LEDGER_STATE_COUCHDBCONFIG_USERNAME: admin
+      CORE_LEDGER_STATE_COUCHDBCONFIG_PASSWORD: adminpw
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: peer node start
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations/peerOrganizations/university.degreechain.org/peers/peer0.university.degreechain.org/msp:/etc/hyperledger/fabric/msp
+      - ./fabric-network/organizations/peerOrganizations/university.degreechain.org/peers/peer0.university.degreechain.org/tls:/etc/hyperledger/fabric/tls
+      - fabric-peer-data:/var/hyperledger/production
+    ports:
+      - "9051:9051"
+      - "19051:19051"
+    depends_on:
+      - couchdb1
+    networks:
+      - degree-network
+
+  # CouchDB for University Peer
+  couchdb1:
+    image: couchdb:3.3
+    container_name: couchdb1
+    environment:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: adminpw
+    ports:
+      - "7984:5984"
+    networks:
+      - degree-network
+
+  # Attestation Authority Application
+  attestation-authority:
+    build:
+      context: .
+      dockerfile: applications/attestation-authority/Dockerfile
+    container_name: attestation-authority
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-attestation.yaml
+      FABRIC_WALLET_PATH: /app/wallets/attestation
+      FABRIC_USER_ID: attestation-admin
+      FABRIC_ORGANIZATION_NAME: AttestationMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/attestation.degreechain.org/connection-attestation.yaml:/app/config/connection-attestation.yaml
+      - ./fabric-network/wallets:/app/wallets
+    depends_on:
+      - postgres
+      - redis
+      - peer0.attestation.degreechain.org
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # University Portal
+  university-portal:
+    build:
+      context: .
+      dockerfile: applications/university-portal/Dockerfile
+    container_name: university-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-university.yaml
+      FABRIC_WALLET_PATH: /app/wallets/university
+      FABRIC_USER_ID: university-admin
+      FABRIC_ORGANIZATION_NAME: UniversityMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
+      UNIVERSITY_CODE: UNI001
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/university.degreechain.org/connection-university.yaml:/app/config/connection-university.yaml
+      - ./fabric-network/wallets:/app/wallets
+    depends_on:
+      - postgres
+      - redis
+      - peer0.university.degreechain.org
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Employer Portal
+  employer-portal:
+    build:
+      context: .
+      dockerfile: applications/employer-portal/Dockerfile
+    container_name: employer-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-employer.yaml
+      FABRIC_WALLET_PATH: /app/wallets/employer
+      FABRIC_USER_ID: employer-admin
+      FABRIC_ORGANIZATION_NAME: EmployerMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/employer.degreechain.org/connection-employer.yaml:/app/config/connection-employer.yaml
+      - ./fabric-network/wallets:/app/wallets
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: applications/api-gateway/Dockerfile
+    container_name: api-gateway
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
+      UNIVERSITY_PORTAL_URL: http://university-portal:8080
+      EMPLOYER_PORTAL_URL: http://employer-portal:8080
+    ports:
+      - "8000:8080"
+    depends_on:
+      - redis
+      - attestation-authority
+      - university-portal
+      - employer-portal
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - degree-network
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - degree-network
+
+  # Elasticsearch for logging
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: false
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    networks:
+      - degree-network
+
+  # Kibana for log visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - degree-network

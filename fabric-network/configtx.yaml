@@ -1,0 +1,178 @@
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: organizations/orderer/orderer.degreechain.org/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer.degreechain.org:7050
+
+  - &AttestationOrg
+    Name: AttestationOrg
+    ID: AttestationMSP
+    MSPDir: organizations/peerOrganizations/attestation.degreechain.org/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('AttestationMSP.admin', 'AttestationMSP.peer', 'AttestationMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('AttestationMSP.admin', 'AttestationMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('AttestationMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('AttestationMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.attestation.degreechain.org
+        Port: 7051
+
+  - &UniversityOrg
+    Name: UniversityOrg
+    ID: UniversityMSP
+    MSPDir: organizations/peerOrganizations/university.degreechain.org/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('UniversityMSP.admin', 'UniversityMSP.peer', 'UniversityMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('UniversityMSP.admin', 'UniversityMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('UniversityMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('UniversityMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.university.degreechain.org
+        Port: 9051
+
+  - &EmployerOrg
+    Name: EmployerOrg
+    ID: EmployerMSP
+    MSPDir: organizations/peerOrganizations/employer.degreechain.org/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('EmployerMSP.admin', 'EmployerMSP.peer', 'EmployerMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('EmployerMSP.admin', 'EmployerMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('EmployerMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('EmployerMSP.peer')"
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.degreechain.org
+        Port: 7050
+        ClientTLSCert: organizations/orderer/orderer.degreechain.org/tls/server.crt
+        ServerTLSCert: organizations/orderer/orderer.degreechain.org/tls/server.crt
+  Addresses:
+    - orderer.degreechain.org:7050
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Profiles:
+  DegreeOrdererGenesis:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Consortiums:
+      DegreeConsortium:
+        Organizations:
+          - *AttestationOrg
+          - *UniversityOrg
+          - *EmployerOrg
+
+  DegreeChannel:
+    Consortium: DegreeConsortium
+    <<: *ChannelDefaults
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *AttestationOrg
+        - *UniversityOrg
+        - *EmployerOrg
+      Capabilities:
+        <<: *ApplicationCapabilities

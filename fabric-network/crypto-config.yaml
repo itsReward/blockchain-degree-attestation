@@ -1,0 +1,33 @@
+OrdererOrgs:
+  - Name: Orderer
+    Domain: degreechain.org
+    EnableNodeOUs: false
+    Specs:
+      - Hostname: orderer
+    Users:
+      Count: 1
+
+PeerOrgs:
+  - Name: AttestationOrg
+    Domain: attestation.degreechain.org
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 3
+
+  - Name: UniversityOrg
+    Domain: university.degreechain.org
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 3
+
+  - Name: EmployerOrg
+    Domain: employer.degreechain.org
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+    Users:
+      Count: 3
