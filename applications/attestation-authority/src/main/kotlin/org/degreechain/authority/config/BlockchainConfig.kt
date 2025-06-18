@@ -1,7 +1,9 @@
 package org.degreechain.authority.config
 
+import kotlinx.coroutines.runBlocking
 import org.degreechain.blockchain.ContractInvoker
 import org.degreechain.blockchain.FabricGatewayClient
+import org.degreechain.blockchain.HealthChecker
 import org.degreechain.blockchain.config.FabricConfig
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
@@ -23,10 +25,21 @@ class BlockchainConfig {
     }
 
     @Bean
+    fun healthChecker(contractInvoker: ContractInvoker): HealthChecker {
+        return HealthChecker(contractInvoker)
+    }
+
+    @Bean
     @Profile("!test")
     fun initializeBlockchainConnection(fabricGatewayClient: FabricGatewayClient): FabricGatewayClient {
         return runBlocking {
-            fabricGatewayClient.initialize()
+            try {
+                fabricGatewayClient.initialize()
+            } catch (e: Exception) {
+                // Log the error but don't fail startup - blockchain might not be ready yet
+                println("Warning: Failed to initialize blockchain connection: ${e.message}")
+                fabricGatewayClient
+            }
         }
     }
 }

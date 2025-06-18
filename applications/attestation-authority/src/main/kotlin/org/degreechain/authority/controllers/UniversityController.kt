@@ -24,11 +24,11 @@ class UniversityController(
         @Valid @RequestBody registration: UniversityRegistration
     ): ResponseEntity<ApiResponse<String>> {
         return try {
-            val statistics = universityService.getUniversityStatistics(universityCode)
-            ResponseEntity.ok(ApiResponse.success(statistics, "University statistics retrieved"))
+            val result = universityService.enrollUniversity(registration)
+            ResponseEntity.ok(ApiResponse.success(result, "University enrollment initiated"))
         } catch (e: Exception) {
-            logger.error(e) { "Failed to get university statistics: $universityCode" }
-            ResponseEntity.badRequest().body(ApiResponse.error<Map<String, Any>>(e))
+            logger.error(e) { "Failed to enroll university: ${registration.universityCode}" }
+            ResponseEntity.badRequest().body(ApiResponse.error<String>(e))
         }
     }
 
@@ -90,6 +90,19 @@ class UniversityController(
             ResponseEntity.ok(ApiResponse.success(university, "University retrieved"))
         } catch (e: Exception) {
             logger.error(e) { "Failed to get university: $universityCode" }
+            ResponseEntity.badRequest().body(ApiResponse.error<Map<String, Any>>(e))
+        }
+    }
+
+    @GetMapping("/{universityCode}/statistics")
+    suspend fun getUniversityStatistics(
+        @PathVariable universityCode: String
+    ): ResponseEntity<ApiResponse<Map<String, Any>>> {
+        return try {
+            val statistics = universityService.getUniversityStatistics(universityCode)
+            ResponseEntity.ok(ApiResponse.success(statistics, "University statistics retrieved"))
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get university statistics: $universityCode" }
             ResponseEntity.badRequest().body(ApiResponse.error<Map<String, Any>>(e))
         }
     }
