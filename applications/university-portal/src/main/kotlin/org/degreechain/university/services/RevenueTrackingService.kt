@@ -25,6 +25,12 @@ class RevenueTrackingService(
     private val objectMapper = ObjectMapper().registerKotlinModule()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            if (value != null) key to value else null
+        }.toMap()
+    }
+
     suspend fun getRevenueOverview(): Map<String, Any> = withContext(Dispatchers.IO) {
         logger.info { "Retrieving revenue overview for university: ${universityConfig.universityCode}" }
 
@@ -46,7 +52,7 @@ class RevenueTrackingService(
                 0.0
             }
 
-            mapOf(
+            safeMapOf(
                 "universityCode" to universityConfig.universityCode,
                 "totalRevenue" to totalRevenue,
                 "totalDegreesIssued" to totalDegrees,
@@ -76,7 +82,7 @@ class RevenueTrackingService(
             val totalRevenue = getTotalRevenue()
             val monthlyData = generateMonthlyRevenueData(totalRevenue, year)
 
-            mapOf(
+            safeMapOf(
                 "year" to year,
                 "monthlyRevenue" to monthlyData,
                 "totalYearRevenue" to monthlyData.sumOf { it["revenue"] as Double },
@@ -102,7 +108,7 @@ class RevenueTrackingService(
             // For now, generate mock trend data
             val trendData = generateVerificationTrends(days)
 
-            mapOf(
+            safeMapOf(
                 "periodDays" to days,
                 "trends" to trendData,
                 "totalVerifications" to trendData.sumOf { it["verifications"] as Int },
@@ -128,7 +134,7 @@ class RevenueTrackingService(
             // For now, generate mock data based on common degree types
             val degreeTypeRevenue = generateDegreeTypeRevenue()
 
-            mapOf(
+            safeMapOf(
                 "revenueByDegreeType" to degreeTypeRevenue,
                 "totalRevenue" to degreeTypeRevenue.values.sum(),
                 "topPerformingDegree" to degreeTypeRevenue.maxByOrNull { it.value }?.key,
@@ -156,14 +162,16 @@ class RevenueTrackingService(
             val currentStats = contractInvoker.getUniversityStatistics(universityConfig.universityCode)
             val currentData: Map<String, Any> = objectMapper.readValue(currentStats)
 
-            comparisons.add(mapOf(
-                "universityCode" to universityConfig.universityCode,
-                "universityName" to currentData["universityName"],
-                "revenue" to currentData["revenue"],
-                "totalDegreesIssued" to currentData["totalDegreesIssued"],
-                "averageRevenuePerDegree" to calculateAverageRevenue(currentData),
-                "isCurrent" to true
-            ))
+            comparisons.add(
+                safeMapOf(
+                    "universityCode" to universityConfig.universityCode,
+                    "universityName" to currentData["universityName"],
+                    "revenue" to currentData["revenue"],
+                    "totalDegreesIssued" to currentData["totalDegreesIssued"],
+                    "averageRevenuePerDegree" to calculateAverageRevenue(currentData),
+                    "isCurrent" to true
+                )
+            )
 
             // Add comparison universities
             compareWithUniversities.forEach { universityCode ->
@@ -171,7 +179,7 @@ class RevenueTrackingService(
                     val statsJson = contractInvoker.getUniversityStatistics(universityCode)
                     val stats: Map<String, Any> = objectMapper.readValue(statsJson)
 
-                    comparisons.add(mapOf(
+                    comparisons.add(safeMapOf(
                         "universityCode" to universityCode,
                         "universityName" to stats["universityName"],
                         "revenue" to stats["revenue"],
@@ -189,7 +197,7 @@ class RevenueTrackingService(
                 (it["revenue"] as? Number)?.toDouble() ?: 0.0
             }.indexOfFirst { it["universityCode"] == universityConfig.universityCode } + 1
 
-            mapOf(
+            safeMapOf(
                 "comparisons" to comparisons,
                 "currentUniversityRanking" to ranking,
                 "totalUniversitiesCompared" to comparisons.size,
@@ -235,7 +243,7 @@ class RevenueTrackingService(
 
         return months.mapIndexed { index, month ->
             val revenue = monthlyBase * seasonalMultipliers[index]
-            mapOf(
+            safeMapOf(
                 "month" to month,
                 "monthNumber" to (index + 1),
                 "revenue" to revenue,
@@ -258,7 +266,7 @@ class RevenueTrackingService(
             val randomFactor = 0.7 + (Math.random() * 0.6) // 0.7 to 1.3
             val verifications = (baseVerifications * weekendMultiplier * randomFactor).toInt()
 
-            trends.add(mapOf(
+            trends.add(safeMapOf(
                 "date" to date.format(dateFormatter),
                 "verifications" to verifications,
                 "dayOfWeek" to date.dayOfWeek.name
@@ -286,7 +294,7 @@ class RevenueTrackingService(
 
     private fun generateDegreeTypeRevenue(): Map<String, Double> {
         // Mock revenue distribution by degree type
-        return mapOf(
+        return safeMapOf(
             "Bachelor of Science" to 15000.0,
             "Bachelor of Arts" to 12000.0,
             "Master of Science" to 8000.0,
@@ -321,7 +329,7 @@ class RevenueTrackingService(
         val revenue = (stats["revenue"] as? Number)?.toDouble() ?: 0.0
         val degrees = (stats["totalDegreesIssued"] as? Number)?.toLong() ?: 0L
 
-        return mapOf(
+        return safeMapOf(
             "revenueEfficiency" to if (degrees > 0) revenue / degrees else 0.0,
             "marketShare" to 0.05, // Mock 5% market share
             "customerSatisfaction" to 4.2, // Mock rating out of 5

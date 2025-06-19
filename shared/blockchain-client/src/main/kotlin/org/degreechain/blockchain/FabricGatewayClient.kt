@@ -1,3 +1,4 @@
+// shared/blockchain-client/src/main/kotlin/org/degreechain/blockchain/FabricGatewayClient.kt
 package org.degreechain.blockchain
 
 import kotlinx.coroutines.Dispatchers
@@ -9,9 +10,8 @@ import org.degreechain.blockchain.models.TransactionResult
 import org.degreechain.common.exceptions.BlockchainException
 import org.degreechain.common.models.ErrorCode
 import org.hyperledger.fabric.gateway.*
-import java.nio.file.Path
 import java.nio.file.Paths
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 private val logger = KotlinLogging.logger {}
 
@@ -29,8 +29,9 @@ class FabricGatewayClient(
             // Load wallet
             val wallet = Wallets.newFileSystemWallet(Paths.get(config.walletPath))
 
-            // Check if identity exists in wallet
-            if (!wallet.exists(config.userId)) {
+            // Check if identity exists in wallet (fixed method call)
+            val identity = wallet.get(config.userId)
+            if (identity == null) {
                 throw BlockchainException(
                     "Identity ${config.userId} not found in wallet",
                     ErrorCode.BLOCKCHAIN_CONNECTION_ERROR
@@ -77,9 +78,6 @@ class FabricGatewayClient(
                     ErrorCode.BLOCKCHAIN_CONNECTION_ERROR
                 )
 
-            // Set transaction timeout
-            transaction.setTransientData(emptyMap())
-
             val result = transaction.submit(*args)
             val resultString = String(result, Charsets.UTF_8)
 
@@ -89,11 +87,11 @@ class FabricGatewayClient(
                 transactionId = transaction.transactionId,
                 result = resultString,
                 success = true,
-                blockNumber = null, // Would need additional call to get block number
+                blockNumber = null,
                 timestamp = System.currentTimeMillis()
             )
         } catch (e: Exception) {
-            logger.error(e) { "Transaction $functionName failed" }
+            logger.error { "Transaction $functionName failed: ${e.message}" }
             throw BlockchainException(
                 "Transaction failed: ${e.message}",
                 ErrorCode.CHAINCODE_EXECUTION_ERROR,
@@ -127,7 +125,7 @@ class FabricGatewayClient(
                 timestamp = System.currentTimeMillis()
             )
         } catch (e: Exception) {
-            logger.error(e) { "Evaluation $functionName failed" }
+            logger.error { "Evaluation $functionName failed: ${e.message}" }
             throw BlockchainException(
                 "Transaction evaluation failed: ${e.message}",
                 ErrorCode.CHAINCODE_EXECUTION_ERROR,
@@ -150,7 +148,6 @@ class FabricGatewayClient(
                     ErrorCode.BLOCKCHAIN_CONNECTION_ERROR
                 )
 
-            // Set custom timeout
             val result = transaction.submit(*args)
             val resultString = String(result, Charsets.UTF_8)
 
@@ -161,20 +158,25 @@ class FabricGatewayClient(
                 blockNumber = null,
                 timestamp = System.currentTimeMillis()
             )
-        } catch (e: TimeoutException) {
-            logger.error(e) { "Transaction $functionName timed out" }
-            throw BlockchainException(
-                "Transaction timed out after ${timeoutSeconds}s",
-                ErrorCode.TRANSACTION_TIMEOUT,
-                cause = e
-            )
         } catch (e: Exception) {
-            logger.error(e) { "Transaction $functionName failed" }
-            throw BlockchainException(
-                "Transaction failed: ${e.message}",
-                ErrorCode.CHAINCODE_EXECUTION_ERROR,
-                cause = e
-            )
+            when (e.message?.contains("timeout", ignoreCase = true)) {
+                true -> {
+                    logger.error { "Transaction $functionName timed out" }
+                    throw BlockchainException(
+                        "Transaction timed out after ${timeoutSeconds}s",
+                        ErrorCode.TRANSACTION_TIMEOUT,
+                        cause = e
+                    )
+                }
+                else -> {
+                    logger.error { "Transaction $functionName failed: ${e.message}" }
+                    throw BlockchainException(
+                        "Transaction failed: ${e.message}",
+                        ErrorCode.CHAINCODE_EXECUTION_ERROR,
+                        cause = e
+                    )
+                }
+            }
         }
     }
 
@@ -183,7 +185,7 @@ class FabricGatewayClient(
             gateway?.close()
             logger.info { "Fabric Gateway Client closed" }
         } catch (e: Exception) {
-            logger.warn(e) { "Error closing Fabric Gateway Client" }
+            logger.warn { "Error closing Fabric Gateway Client: ${e.message}" }
         }
     }
 }

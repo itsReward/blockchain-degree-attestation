@@ -252,7 +252,6 @@ class DegreeSubmissionService(
                     degreeClassification = row["degreeClassification"] ?: throw BusinessException("Missing degree classification", ErrorCode.VALIDATION_ERROR),
                     issuanceDate = LocalDateTime.parse(row["issuanceDate"], dateFormatter),
                     expiryDate = row["expiryDate"]?.let { if (it.isNotBlank()) LocalDateTime.parse(it, dateFormatter) else null },
-                    metadata = emptyMap()
                 )
             } catch (e: Exception) {
                 throw BusinessException("Error parsing CSV line ${index + 2}: ${e.message}", ErrorCode.VALIDATION_ERROR, cause = e)

@@ -1,10 +1,8 @@
 package org.degreechain.university.config
 
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.boot.context.properties.ConstructorBinding
 
 @ConfigurationProperties(prefix = "university")
-@ConstructorBinding
 data class UniversityConfig(
     val universityCode: String = "UNI001",
     val universityName: String = "Default University",

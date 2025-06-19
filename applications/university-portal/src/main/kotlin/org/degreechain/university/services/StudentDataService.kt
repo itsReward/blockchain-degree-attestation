@@ -1,6 +1,7 @@
 package org.degreechain.university.services
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import org.degreechain.common.exceptions.BusinessException
@@ -145,9 +146,6 @@ class StudentDataService(
 
         // In a real implementation, this would query the blockchain for degrees issued to this student
         // For now, return empty list as placeholder
-        // This would involve querying the blockchain for degrees where the student matches
-
-        // Mock implementation
         emptyList()
     }
 
@@ -170,7 +168,7 @@ class StudentDataService(
     suspend fun getStudentStatistics(): Map<String, Any> = withContext(Dispatchers.IO) {
         logger.debug { "Retrieving student statistics" }
 
-        val allStudents = studentRecords.values
+        val allStudents = studentRecords.values.toList()
         val currentYear = LocalDateTime.now().year
 
         val studentsThisYear = allStudents.count { student ->
@@ -179,11 +177,11 @@ class StudentDataService(
 
         val programBreakdown = allStudents
             .groupBy { it.program }
-            .mapValues { it.value.size }
+            .mapValues { (_, students) -> students.size }
 
         val statusBreakdown = allStudents
             .groupBy { it.status }
-            .mapValues { it.value.size }
+            .mapValues { (_, students) -> students.size }
 
         mapOf(
             "totalStudents" to allStudents.size,

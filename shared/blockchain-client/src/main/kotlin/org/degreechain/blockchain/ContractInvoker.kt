@@ -14,7 +14,7 @@ private val logger = KotlinLogging.logger {}
 class ContractInvoker(
     private val fabricClient: FabricGatewayClient
 ) {
-    private val objectMapper = ObjectMapper().registerKotlinModule()
+    val objectMapper = ObjectMapper().registerKotlinModule()
 
     // ==================== UNIVERSITY OPERATIONS ====================
 

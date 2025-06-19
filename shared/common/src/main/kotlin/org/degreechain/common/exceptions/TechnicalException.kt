@@ -2,9 +2,9 @@ package org.degreechain.common.exceptions
 
 import org.degreechain.common.models.ErrorCode
 
-class TechnicalException(
+open class TechnicalException(
     override val message: String,
-    val errorCode: ErrorCode,
+    open val errorCode: ErrorCode,
     override val cause: Throwable? = null
 ) : Exception(message, cause) {
 

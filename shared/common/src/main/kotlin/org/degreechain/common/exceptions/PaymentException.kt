@@ -4,7 +4,7 @@ import org.degreechain.common.models.ErrorCode
 
 class PaymentException(
     override val message: String,
-    val errorCode: ErrorCode = ErrorCode.PAYMENT_FAILED,
+    override val errorCode: ErrorCode = ErrorCode.PAYMENT_FAILED,
     val paymentId: String? = null,
     val amount: Double? = null,
     val currency: String? = null,

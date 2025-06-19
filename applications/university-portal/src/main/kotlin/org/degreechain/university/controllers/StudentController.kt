@@ -7,7 +7,7 @@ import org.degreechain.university.services.StudentDataService
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.web.bind.annotation.*
-import javax.validation.Valid
+import jakarta.validation.Valid
 
 private val logger = KotlinLogging.logger {}
 
@@ -65,8 +65,8 @@ class StudentController(
         @RequestParam(defaultValue = "20") size: Int
     ): ResponseEntity<ApiResponse<Map<String, Any>>> {
         return try {
-            val students = studentDataService.searchStudents(query, page, size)
-            ResponseEntity.ok(ApiResponse.success(students, "Students retrieved"))
+            val result = studentDataService.searchStudents(query, page, size)
+            ResponseEntity.ok(ApiResponse.success(result, "Students retrieved"))
         } catch (e: Exception) {
             logger.error(e) { "Failed to search students" }
             ResponseEntity.badRequest().body(ApiResponse.error<Map<String, Any>>(e))

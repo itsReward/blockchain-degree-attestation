@@ -1,10 +1,9 @@
+// shared/blockchain-client/src/main/kotlin/org/degreechain/blockchain/config/FabricConfig.kt
 package org.degreechain.blockchain.config
 
 import org.springframework.boot.context.properties.ConfigurationProperties
-import org.springframework.boot.context.properties.ConstructorBinding
 
 @ConfigurationProperties(prefix = "fabric")
-@ConstructorBinding
 data class FabricConfig(
     val networkConfigPath: String,
     val walletPath: String,

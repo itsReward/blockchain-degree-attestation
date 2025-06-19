@@ -9,8 +9,8 @@ dependencies {
     // Shared common module
     api(project(":shared:common"))
 
-    // Hyperledger Fabric Gateway SDK
-    api("org.hyperledger.fabric:fabric-gateway:2.2.9")
+    // LEGACY: Hyperledger Fabric Gateway Java SDK (deprecated but working)
+    api("org.hyperledger.fabric:fabric-gateway-java:2.2.0")
     api("io.grpc:grpc-netty-shaded:1.58.0")
 
     // Spring Boot for configuration

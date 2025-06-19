@@ -39,6 +39,9 @@ dependencies {
     // Monitoring
     implementation("io.micrometer:micrometer-registry-prometheus")
 
+    // Jakarka
+    implementation("org.springframework.boot:spring-boot-starter-validation")
+
     // Testing
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.security:spring-security-test")
