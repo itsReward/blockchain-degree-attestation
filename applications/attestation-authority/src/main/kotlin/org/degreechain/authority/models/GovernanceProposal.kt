@@ -2,7 +2,7 @@ package org.degreechain.authority.models
 
 import org.degreechain.common.models.BaseEntity
 import java.time.LocalDateTime
-import javax.validation.constraints.*
+import jakarta.validation.constraints.*
 
 data class GovernanceProposal(
     @field:NotBlank(message = "Proposer organization is required")

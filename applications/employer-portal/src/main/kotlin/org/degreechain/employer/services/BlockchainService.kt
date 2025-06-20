@@ -26,6 +26,12 @@ class BlockchainService(
     private val objectMapper = ObjectMapper().registerKotlinModule()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            value?.let { key to it }
+        }.toMap()
+    }
+
     suspend fun verifyDegreeOnBlockchain(
         certificateNumber: String,
         verifierOrganization: String,
@@ -168,7 +174,7 @@ class BlockchainService(
 
             logger.info { "Verification payment processed on blockchain: $certificateNumber" }
 
-            mapOf(
+            safeMapOf(
                 "success" to true,
                 "message" to result,
                 "certificateNumber" to certificateNumber,
@@ -192,7 +198,7 @@ class BlockchainService(
         try {
             val healthStatus = healthChecker.checkDetailedHealth()
 
-            mapOf(
+            safeMapOf(
                 "overall" to healthStatus,
                 "timestamp" to LocalDateTime.now().format(dateFormatter),
                 "networkStatus" to getNetworkStatus()
@@ -200,7 +206,7 @@ class BlockchainService(
 
         } catch (e: Exception) {
             logger.error(e) { "Failed to check blockchain health" }
-            mapOf(
+            safeMapOf(
                 "isHealthy" to false,
                 "error" to e.message,
                 "timestamp" to LocalDateTime.now().format(dateFormatter)
@@ -226,7 +232,7 @@ class BlockchainService(
                 (it["revenue"] as? Number)?.toDouble() ?: 0.0
             }
 
-            mapOf(
+            safeMapOf(
                 "networkOverview" to mapOf(
                     "totalUniversities" to universities.size,
                     "activeUniversities" to activeUniversities,
@@ -351,13 +357,13 @@ class BlockchainService(
     private suspend fun getNetworkStatus(): Map<String, Any> {
         return try {
             val pingResult = contractInvoker.ping()
-            mapOf(
+            safeMapOf(
                 "connectionStatus" to if (pingResult) "CONNECTED" else "DISCONNECTED",
                 "lastPingTime" to LocalDateTime.now().format(dateFormatter),
                 "responseTime" to "< 1s" // Simplified for demo
             )
         } catch (e: Exception) {
-            mapOf(
+            safeMapOf(
                 "connectionStatus" to "ERROR",
                 "error" to e.message,
                 "lastPingTime" to LocalDateTime.now().format(dateFormatter)
@@ -388,7 +394,7 @@ class BlockchainService(
 
         // In a real implementation, this would query actual blockchain metrics
         // For now, return mock metrics
-        mapOf(
+        safeMapOf(
             "averageResponseTime" to 250, // milliseconds
             "successRate" to 0.99,
             "totalTransactions" to 15420,

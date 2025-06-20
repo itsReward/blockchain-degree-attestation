@@ -16,8 +16,8 @@ COPY applications/university-portal applications/university-portal
 RUN chmod +x gradlew
 RUN ./gradlew :applications:university-portal:build -x test
 
-# Copy the built jar
-RUN cp applications/university-portal/build/libs/*.jar app.jar
+# Copy the built jar (find the main application jar, excluding plain jars)
+RUN find applications/university-portal/build/libs/ -name "*.jar" -not -name "*-plain.jar" -exec cp {} app.jar \;
 
 # Expose port
 EXPOSE 8080

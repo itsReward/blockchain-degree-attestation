@@ -24,6 +24,13 @@ class StudentDataService(
     private val studentRecords = ConcurrentHashMap<String, StudentRecord>()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            value?.let { key to it }
+        }.toMap()
+    }
+
+
     suspend fun createStudentRecord(studentRecord: StudentRecord): String = withContext(Dispatchers.IO) {
         logger.info { "Creating student record for: ${studentRecord.studentId}" }
 
@@ -126,7 +133,7 @@ class StudentDataService(
             emptyList()
         }
 
-        mapOf(
+        safeMapOf(
             "students" to paginatedStudents,
             "page" to page,
             "size" to size,
@@ -134,7 +141,7 @@ class StudentDataService(
             "totalPages" to (filteredStudents.size + size - 1) / size,
             "hasNext" to (endIndex < filteredStudents.size),
             "hasPrevious" to (page > 0),
-            "query" to query
+            "query" to (query ?: "")
         )
     }
 

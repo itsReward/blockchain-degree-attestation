@@ -41,4 +41,6 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
+
+    implementation("org.springframework.boot:spring-boot-starter-validation")
 }

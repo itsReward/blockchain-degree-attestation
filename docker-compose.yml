@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: degree_user
       POSTGRES_PASSWORD: degree_password
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -104,25 +104,25 @@ services:
     restart: unless-stopped
 
   # API Gateway
-  api-gateway:
-    build:
-      context: .
-      dockerfile: applications/api-gateway/Dockerfile
-    container_name: api-gateway
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_REDIS_HOST: redis
-      SPRING_REDIS_PORT: 6379
-      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
-      UNIVERSITY_PORTAL_URL: http://university-portal:8080
-      EMPLOYER_PORTAL_URL: http://employer-portal:8080
-    ports:
-      - "8000:8080"
-    depends_on:
-      - redis
-      - attestation-authority
-      - university-portal
-      - employer-portal
-    networks:
-      - degree-network
-    restart: unless-stopped
+#  api-gateway:
+#    build:
+#      context: .
+#      dockerfile: applications/api-gateway/Dockerfile
+#    container_name: api-gateway
+#    environment:
+#      SPRING_PROFILES_ACTIVE: docker
+#      SPRING_REDIS_HOST: redis
+#      SPRING_REDIS_PORT: 6379
+#      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
+#      UNIVERSITY_PORTAL_URL: http://university-portal:8080
+#      EMPLOYER_PORTAL_URL: http://employer-portal:8080
+#    ports:
+#     - "8000:8080"
+#    depends_on:
+#      - redis
+#      - attestation-authority
+#      - university-portal
+#      - employer-portal
+#    networks:
+#      - degree-network
+#    restart: unless-stopped

@@ -24,6 +24,13 @@ class RevenueService(
     private val objectMapper = ObjectMapper().registerKotlinModule()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            value?.let { key to it }
+        }.toMap()
+    }
+
+
     suspend fun getRevenueSummary(): Map<String, Any> = withContext(Dispatchers.IO) {
         logger.info { "Retrieving revenue summary" }
 
@@ -45,7 +52,7 @@ class RevenueService(
             val authorityShare = totalRevenue * 0.5
             val universityTotalShare = totalRevenue * 0.5
 
-            mapOf(
+            safeMapOf(
                 "totalRevenue" to totalRevenue,
                 "authorityShare" to authorityShare,
                 "universityTotalShare" to universityTotalShare,
@@ -83,7 +90,7 @@ class RevenueService(
             val degreesIssued = (stats["totalDegreesIssued"] as? Number)?.toLong() ?: 0L
             val averageRevenuePerDegree = if (degreesIssued > 0) revenue / degreesIssued else 0.0
 
-            mapOf(
+            safeMapOf(
                 "universityCode" to universityCode,
                 "universityName" to stats["universityName"],
                 "totalRevenue" to revenue,
@@ -126,7 +133,7 @@ class RevenueService(
                 val revenue = (university["revenue"] as? Number)?.toDouble() ?: 0.0
 
                 if (revenue > 0) {
-                    distributionRecords.add(mapOf(
+                    distributionRecords.add(safeMapOf(
                         "universityCode" to universityCode,
                         "universityName" to university["universityName"],
                         "amount" to revenue,
@@ -170,7 +177,7 @@ class RevenueService(
                 emptyList()
             }
 
-            mapOf(
+            safeMapOf(
                 "payments" to pagePayments,
                 "page" to page,
                 "size" to size,
@@ -192,7 +199,7 @@ class RevenueService(
     private fun generateMockPaymentHistory(paymentType: String?): List<Map<String, Any>> {
         // Mock payment history - in real implementation this would come from blockchain
         return listOf(
-            mapOf(
+            safeMapOf(
                 "paymentId" to "pay_001",
                 "fromOrganization" to "UNI001",
                 "toOrganization" to "ATTESTATION_AUTHORITY",
@@ -201,7 +208,7 @@ class RevenueService(
                 "status" to "COMPLETED",
                 "timestamp" to LocalDate.now().minusDays(30).format(dateFormatter)
             ),
-            mapOf(
+            safeMapOf(
                 "paymentId" to "pay_002",
                 "fromOrganization" to "EMP001",
                 "toOrganization" to "UNI001",

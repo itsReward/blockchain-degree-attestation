@@ -16,8 +16,8 @@ COPY applications/attestation-authority applications/attestation-authority
 RUN chmod +x gradlew
 RUN ./gradlew :applications:attestation-authority:build -x test
 
-# Copy the built jar
-RUN cp applications/attestation-authority/build/libs/*.jar app.jar
+# Copy the built jar (find the main application jar, excluding plain jars)
+RUN find applications/attestation-authority/build/libs/ -name "*.jar" -not -name "*-plain.jar" -exec cp {} app.jar \;
 
 # Expose port
 EXPOSE 8080

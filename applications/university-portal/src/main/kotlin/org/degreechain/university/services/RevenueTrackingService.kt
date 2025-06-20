@@ -294,7 +294,7 @@ class RevenueTrackingService(
 
     private fun generateDegreeTypeRevenue(): Map<String, Double> {
         // Mock revenue distribution by degree type
-        return safeMapOf(
+        return mapOf(
             "Bachelor of Science" to 15000.0,
             "Bachelor of Arts" to 12000.0,
             "Master of Science" to 8000.0,

@@ -36,6 +36,13 @@ class AuditService {
     private val auditEvents = ConcurrentHashMap<String, AuditEvent>()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            value?.let { key to it }
+        }.toMap()
+    }
+
+
     suspend fun logEvent(
         eventType: String,
         description: String,
@@ -115,7 +122,7 @@ class AuditService {
             emptyList()
         }
 
-        mapOf(
+        safeMapOf(
             "auditEvents" to paginatedEvents,
             "page" to page,
             "size" to size,
@@ -161,7 +168,7 @@ class AuditService {
         // Calculate risk score
         val riskScore = calculateRiskScore(recentEvents)
 
-        mapOf(
+        safeMapOf(
             "organizationName" to organizationName,
             "reportPeriodDays" to days,
             "totalEvents" to totalEvents,
@@ -212,7 +219,7 @@ class AuditService {
             "securityStandards" to checkSecurityStandards(reportEvents)
         )
 
-        mapOf(
+        safeMapOf(
             "organizationName" to organizationName,
             "reportPeriod" to mapOf(
                 "startDate" to startDate.format(dateFormatter),
@@ -276,7 +283,7 @@ class AuditService {
             .filter { it.value.size >= 5 }
 
         failedAuthsByIP.forEach { (ip, failures) ->
-            patterns.add(mapOf(
+            patterns.add(safeMapOf(
                 "pattern" to "MULTIPLE_FAILED_AUTHENTICATIONS",
                 "description" to "Multiple failed authentication attempts from IP: $ip",
                 "severity" to "HIGH",
@@ -294,7 +301,7 @@ class AuditService {
         val avgVerificationsPerHour = hourlyVerifications.values.average()
         hourlyVerifications.forEach { (hour, count) ->
             if (count > avgVerificationsPerHour * 3) {
-                patterns.add(mapOf(
+                patterns.add(safeMapOf(
                     "pattern" to "UNUSUAL_VERIFICATION_VOLUME",
                     "description" to "Unusually high verification volume at hour $hour",
                     "severity" to "MEDIUM",

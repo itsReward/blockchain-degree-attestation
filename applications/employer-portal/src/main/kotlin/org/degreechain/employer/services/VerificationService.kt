@@ -28,6 +28,13 @@ class VerificationService(
     private val objectMapper = ObjectMapper().registerKotlinModule()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
+    private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
+        return pairs.mapNotNull { (key, value) ->
+            value?.let { key to it }
+        }.toMap()
+    }
+
+
     suspend fun verifyDegree(request: VerificationRequest): VerificationResult = withContext(Dispatchers.IO) {
         logger.info { "Starting degree verification for certificate: ${request.certificateNumber}" }
 
@@ -167,7 +174,7 @@ class VerificationService(
             emptyList()
         }
 
-        mapOf(
+        safeMapOf(
             "verifications" to paginatedHistory,
             "page" to page,
             "size" to size,
@@ -200,7 +207,7 @@ class VerificationService(
             (it["paymentAmount"] as? Number)?.toDouble() ?: 0.0
         }
 
-        mapOf(
+        safeMapOf(
             "organizationName" to organizationName,
             "totalVerifications" to totalVerifications,
             "successfulVerifications" to successfulVerifications,
@@ -263,7 +270,7 @@ class VerificationService(
     }
 
     private fun extractAdditionalInfo(verificationData: Map<String, Any>): Map<String, Any> {
-        return mapOf(
+        return safeMapOf(
             "verificationTimestamp" to verificationData["verificationTimestamp"],
             "extractionMethod" to verificationData["extractionMethod"],
             "blockchainTransactionId" to UUID.randomUUID().toString() // Mock transaction ID
@@ -275,7 +282,7 @@ class VerificationService(
         statusFilter: VerificationStatus?
     ): List<Map<String, Any>> {
         val mockData = listOf(
-            mapOf(
+            safeMapOf(
                 "verificationId" to "ver_001",
                 "certificateNumber" to "BSc-12700",
                 "verificationStatus" to "VERIFIED",
@@ -285,7 +292,7 @@ class VerificationService(
                 "verificationTimestamp" to LocalDateTime.now().minusDays(1).format(dateFormatter),
                 "paymentAmount" to 10.0
             ),
-            mapOf(
+            safeMapOf(
                 "verificationId" to "ver_002",
                 "certificateNumber" to "MSc-45678",
                 "verificationStatus" to "VERIFIED",
@@ -295,7 +302,7 @@ class VerificationService(
                 "verificationTimestamp" to LocalDateTime.now().minusDays(3).format(dateFormatter),
                 "paymentAmount" to 15.0
             ),
-            mapOf(
+            safeMapOf(
                 "verificationId" to "ver_003",
                 "certificateNumber" to "BSc-99999",
                 "verificationStatus" to "FAILED",

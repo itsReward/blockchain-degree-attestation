@@ -16,8 +16,8 @@ COPY applications/employer-portal applications/employer-portal
 RUN chmod +x gradlew
 RUN ./gradlew :applications:employer-portal:build -x test
 
-# Copy the built jar
-RUN cp applications/employer-portal/build/libs/*.jar app.jar
+# Copy the built jar (find the main application jar, excluding plain jars)
+RUN find applications/employer-portal/build/libs/ -name "*.jar" -not -name "*-plain.jar" -exec cp {} app.jar \;
 
 # Expose port
 EXPOSE 8080

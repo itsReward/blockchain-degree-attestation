@@ -1,7 +1,7 @@
 package org.degreechain.authority.models
 
 import org.degreechain.common.models.BaseEntity
-import javax.validation.constraints.*
+import jakarta.validation.constraints.*
 
 data class UniversityRegistration(
     @field:NotBlank(message = "University code is required")
