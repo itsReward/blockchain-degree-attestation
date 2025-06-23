@@ -6,29 +6,28 @@ import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.security.Key
-import java.time.LocalDateTime
-import java.time.ZoneId
 import java.util.*
+import javax.crypto.spec.SecretKeySpec
 
 private val logger = KotlinLogging.logger {}
 
 @Component
 class JwtTokenProvider {
 
-    @Value("\${jwt.secret:mySecretKey12345678901234567890123456789012345678901234567890}")
+    @Value("\${jwt.secret}")
     private lateinit var jwtSecret: String
 
-    @Value("\${jwt.access-token-expiration:3600000}") // 1 hour
-    private var accessTokenExpiration: Long = 3600000
+    @Value("\${jwt.access-token-expiration}")
+    private var accessTokenExpiration: Long = 3600000 // 1 hour
 
-    @Value("\${jwt.refresh-token-expiration:2592000000}") // 30 days
-    private var refreshTokenExpiration: Long = 2592000000
+    @Value("\${jwt.refresh-token-expiration}")
+    private var refreshTokenExpiration: Long = 2592000000 // 30 days
 
-    @Value("\${jwt.issuer:degreechain-gateway}")
+    @Value("\${jwt.issuer}")
     private lateinit var issuer: String
 
     private val key: Key by lazy {
-        Keys.hmacShaKeyFor(jwtSecret.toByteArray())
+        SecretKeySpec(jwtSecret.toByteArray(), SignatureAlgorithm.HS512.jcaName)
     }
 
     fun generateAccessToken(
@@ -41,13 +40,11 @@ class JwtTokenProvider {
         val now = Date()
         val expiryDate = Date(now.time + accessTokenExpiration)
 
-        val claims = Jwts.claims().setSubject(userId)
-        claims["role"] = role
-        claims["type"] = "access"
-        organizationCode?.let { claims["organizationCode"] = it }
-
         return Jwts.builder()
-            .setClaims(claims)
+            .setSubject(userId)
+            .claim("role", role)
+            .claim("type", "access")
+            .apply { organizationCode?.let { claim("organizationCode", it) } }
             .setIssuedAt(now)
             .setExpiration(expiryDate)
             .setIssuer(issuer)
@@ -62,11 +59,9 @@ class JwtTokenProvider {
         val now = Date()
         val expiryDate = Date(now.time + refreshTokenExpiration)
 
-        val claims = Jwts.claims().setSubject(userId)
-        claims["type"] = "refresh"
-
         return Jwts.builder()
-            .setClaims(claims)
+            .setSubject(userId)
+            .claim("type", "refresh")
             .setIssuedAt(now)
             .setExpiration(expiryDate)
             .setIssuer(issuer)
@@ -77,7 +72,7 @@ class JwtTokenProvider {
 
     fun validateToken(token: String): Boolean {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)
@@ -103,7 +98,7 @@ class JwtTokenProvider {
 
     fun getUserIdFromToken(token: String): String? {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)
@@ -118,7 +113,7 @@ class JwtTokenProvider {
 
     fun getRoleFromToken(token: String): String? {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)
@@ -133,7 +128,7 @@ class JwtTokenProvider {
 
     fun getOrganizationCodeFromToken(token: String): String? {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)
@@ -148,7 +143,7 @@ class JwtTokenProvider {
 
     fun getTokenTypeFromToken(token: String): String? {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)
@@ -157,109 +152,6 @@ class JwtTokenProvider {
             claims["type"] as? String
         } catch (e: JwtException) {
             logger.debug(e) { "Error extracting token type from token" }
-            null
-        }
-    }
-
-    fun getExpirationFromToken(token: String): Date? {
-        return try {
-            val claims = Jwts.parserBuilder()
-                .setSigningKey(key)
-                .build()
-                .parseClaimsJws(token)
-                .body
-
-            claims.expiration
-        } catch (e: JwtException) {
-            logger.debug(e) { "Error extracting expiration from token" }
-            null
-        }
-    }
-
-    fun getIssuedAtFromToken(token: String): Date? {
-        return try {
-            val claims = Jwts.parserBuilder()
-                .setSigningKey(key)
-                .build()
-                .parseClaimsJws(token)
-                .body
-
-            claims.issuedAt
-        } catch (e: JwtException) {
-            logger.debug(e) { "Error extracting issued at from token" }
-            null
-        }
-    }
-
-    fun getTokenIdFromToken(token: String): String? {
-        return try {
-            val claims = Jwts.parserBuilder()
-                .setSigningKey(key)
-                .build()
-                .parseClaimsJws(token)
-                .body
-
-            claims.id
-        } catch (e: JwtException) {
-            logger.debug(e) { "Error extracting token ID from token" }
-            null
-        }
-    }
-
-    fun isTokenExpired(token: String): Boolean {
-        val expiration = getExpirationFromToken(token)
-        return expiration?.before(Date()) ?: true
-    }
-
-    fun isRefreshToken(token: String): Boolean {
-        return getTokenTypeFromToken(token) == "refresh"
-    }
-
-    fun isAccessToken(token: String): Boolean {
-        return getTokenTypeFromToken(token) == "access"
-    }
-
-    fun getAccessTokenExpirationTime(): Long {
-        return accessTokenExpiration / 1000 // Return in seconds
-    }
-
-    fun getRefreshTokenExpirationTime(): Long {
-        return refreshTokenExpiration / 1000 // Return in seconds
-    }
-
-    fun getRemainingTimeFromToken(token: String): Long? {
-        return try {
-            val expiration = getExpirationFromToken(token)
-            expiration?.let {
-                val remaining = it.time - System.currentTimeMillis()
-                if (remaining > 0) remaining / 1000 else 0 // Return in seconds
-            }
-        } catch (e: Exception) {
-            logger.debug(e) { "Error calculating remaining time from token" }
-            null
-        }
-    }
-
-    fun getAllClaimsFromToken(token: String): Map<String, Any>? {
-        return try {
-            val claims = Jwts.parserBuilder()
-                .setSigningKey(key)
-                .build()
-                .parseClaimsJws(token)
-                .body
-
-            mapOf(
-                "subject" to (claims.subject ?: ""),
-                "role" to (claims["role"] ?: ""),
-                "organizationCode" to (claims["organizationCode"] ?: ""),
-                "type" to (claims["type"] ?: ""),
-                "issuedAt" to claims.issuedAt,
-                "expiration" to claims.expiration,
-                "issuer" to (claims.issuer ?: ""),
-                "tokenId" to (claims.id ?: "")
-            )
-        } catch (e: JwtException) {
-            logger.debug(e) { "Error extracting all claims from token" }
             null
         }
     }
@@ -287,6 +179,10 @@ class JwtTokenProvider {
         }
     }
 
+    fun isRefreshToken(token: String): Boolean {
+        return getTokenTypeFromToken(token) == "refresh"
+    }
+
     fun validateTokenStructure(token: String): Boolean {
         return try {
             val parts = token.split(".")
@@ -302,12 +198,10 @@ class JwtTokenProvider {
         val now = Date()
         val expiryDate = Date(now.time + accessTokenExpiration)
 
-        val claims = Jwts.claims().setSubject("api-key:$apiKey")
-        claims["type"] = "api-key"
-        claims["permissions"] = permissions
-
         return Jwts.builder()
-            .setClaims(claims)
+            .setSubject("api-key:$apiKey")
+            .claim("type", "api-key")
+            .claim("permissions", permissions)
             .setIssuedAt(now)
             .setExpiration(expiryDate)
             .setIssuer(issuer)
@@ -318,7 +212,7 @@ class JwtTokenProvider {
 
     fun getPermissionsFromToken(token: String): List<String>? {
         return try {
-            val claims = Jwts.parserBuilder()
+            val claims = Jwts.parser()
                 .setSigningKey(key)
                 .build()
                 .parseClaimsJws(token)

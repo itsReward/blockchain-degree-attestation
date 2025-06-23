@@ -1,10 +1,16 @@
-# docker-compose.simple.yml - For testing without blockchain
+# docker-compose.yml - Complete setup with blockchain network
+version: '3.8'
+
 networks:
   degree-network:
     driver: bridge
 
 volumes:
   postgres-data:
+  orderer-data:
+  peer0-attestation-data:
+  peer0-university-data:
+  peer0-employer-data:
 
 services:
   # PostgreSQL Database
@@ -28,10 +34,172 @@ services:
     image: redis:7-alpine
     container_name: degree-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     networks:
       - degree-network
     restart: unless-stopped
+
+  # Hyperledger Fabric Orderer
+  orderer.degree.com:
+    image: hyperledger/fabric-orderer:2.5
+    container_name: orderer.degree.com
+    environment:
+      - ORDERER_GENERAL_LOGLEVEL=INFO
+      - ORDERER_GENERAL_LISTENADDRESS=0.0.0.0
+      - ORDERER_GENERAL_GENESISMETHOD=file
+      - ORDERER_GENERAL_GENESISFILE=/var/hyperledger/orderer/orderer.genesis.block
+      - ORDERER_GENERAL_LOCALMSPID=OrdererMSP
+      - ORDERER_GENERAL_LOCALMSPDIR=/var/hyperledger/orderer/msp
+      - ORDERER_GENERAL_TLS_ENABLED=false
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric
+    command: orderer
+    volumes:
+      - ./fabric-network/channel-artifacts/genesis.block:/var/hyperledger/orderer/orderer.genesis.block
+      - ./fabric-network/organizations/ordererOrganizations/degree.com/orderers/orderer.degree.com/msp:/var/hyperledger/orderer/msp
+      - orderer-data:/var/hyperledger/production/orderer
+    ports:
+      - "7050:7050"
+    networks:
+      - degree-network
+
+  # Attestation Authority Peer
+  peer0.attestation.degree.com:
+    image: hyperledger/fabric-peer:2.5
+    container_name: peer0.attestation.degree.com
+    environment:
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=blockchain-degree-attestation_degree-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=false
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+      - CORE_PEER_PROFILE_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.attestation.degree.com
+      - CORE_PEER_ADDRESS=peer0.attestation.degree.com:7051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.attestation.degree.com:7052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.attestation.degree.com:7051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.attestation.degree.com:7051
+      - CORE_PEER_LOCALMSPID=AttestationMSP
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations/peerOrganizations/attestation.degree.com/peers/peer0.attestation.degree.com/msp:/etc/hyperledger/fabric/msp
+      - ./fabric-network/organizations/peerOrganizations/attestation.degree.com/peers/peer0.attestation.degree.com/tls:/etc/hyperledger/fabric/tls
+      - peer0-attestation-data:/var/hyperledger/production
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: peer node start
+    ports:
+      - "7051:7051"
+    networks:
+      - degree-network
+
+  # University Peer
+  peer0.university.degree.com:
+    image: hyperledger/fabric-peer:2.5
+    container_name: peer0.university.degree.com
+    environment:
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=blockchain-degree-attestation_degree-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=false
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+      - CORE_PEER_PROFILE_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.university.degree.com
+      - CORE_PEER_ADDRESS=peer0.university.degree.com:8051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:8051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.university.degree.com:8052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:8052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.university.degree.com:8051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.university.degree.com:8051
+      - CORE_PEER_LOCALMSPID=UniversityMSP
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations/peerOrganizations/university.degree.com/peers/peer0.university.degree.com/msp:/etc/hyperledger/fabric/msp
+      - ./fabric-network/organizations/peerOrganizations/university.degree.com/peers/peer0.university.degree.com/tls:/etc/hyperledger/fabric/tls
+      - peer0-university-data:/var/hyperledger/production
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: peer node start
+    ports:
+      - "8051:8051"
+    networks:
+      - degree-network
+
+  # Employer Peer
+  peer0.employer.degree.com:
+    image: hyperledger/fabric-peer:2.5
+    container_name: peer0.employer.degree.com
+    environment:
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - CORE_VM_DOCKER_HOSTCONFIG_NETWORKMODE=blockchain-degree-attestation_degree-network
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_TLS_ENABLED=false
+      - CORE_PEER_GOSSIP_USELEADERELECTION=true
+      - CORE_PEER_GOSSIP_ORGLEADER=false
+      - CORE_PEER_PROFILE_ENABLED=true
+      - CORE_PEER_TLS_CERT_FILE=/etc/hyperledger/fabric/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/etc/hyperledger/fabric/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt
+      - CORE_PEER_ID=peer0.employer.degree.com
+      - CORE_PEER_ADDRESS=peer0.employer.degree.com:9051
+      - CORE_PEER_LISTENADDRESS=0.0.0.0:9051
+      - CORE_PEER_CHAINCODEADDRESS=peer0.employer.degree.com:9052
+      - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:9052
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.employer.degree.com:9051
+      - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.employer.degree.com:9051
+      - CORE_PEER_LOCALMSPID=EmployerMSP
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations/peerOrganizations/employer.degree.com/peers/peer0.employer.degree.com/msp:/etc/hyperledger/fabric/msp
+      - ./fabric-network/organizations/peerOrganizations/employer.degree.com/peers/peer0.employer.degree.com/tls:/etc/hyperledger/fabric/tls
+      - peer0-employer-data:/var/hyperledger/production
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: peer node start
+    ports:
+      - "9051:9051"
+    networks:
+      - degree-network
+
+  # CLI container for blockchain operations
+  cli:
+    image: hyperledger/fabric-tools:2.5
+    container_name: cli
+    tty: true
+    stdin_open: true
+    environment:
+      - GOPATH=/opt/gopath
+      - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
+      - FABRIC_LOGGING_SPEC=INFO
+      - CORE_PEER_ID=cli
+      - CORE_PEER_ADDRESS=peer0.attestation.degree.com:7051
+      - CORE_PEER_LOCALMSPID=AttestationMSP
+      - CORE_PEER_TLS_ENABLED=false
+      - CORE_PEER_TLS_CERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/attestation.degree.com/peers/peer0.attestation.degree.com/tls/server.crt
+      - CORE_PEER_TLS_KEY_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/attestation.degree.com/peers/peer0.attestation.degree.com/tls/server.key
+      - CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/attestation.degree.com/peers/peer0.attestation.degree.com/tls/ca.crt
+      - CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/attestation.degree.com/users/Admin@attestation.degree.com/msp
+    working_dir: /opt/gopath/src/github.com/hyperledger/fabric/peer
+    command: /bin/bash
+    volumes:
+      - /var/run/:/host/var/run/
+      - ./fabric-network/organizations:/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/
+      - ./fabric-network/scripts:/opt/gopath/src/github.com/hyperledger/fabric/peer/scripts/
+      - ./fabric-network/channel-artifacts:/opt/gopath/src/github.com/hyperledger/fabric/peer/channel-artifacts
+      - ./chaincode:/opt/gopath/src/github.com/chaincode
+    depends_on:
+      - orderer.degree.com
+      - peer0.attestation.degree.com
+      - peer0.university.degree.com
+      - peer0.employer.degree.com
+    networks:
+      - degree-network
 
   # Attestation Authority Application
   attestation-authority:
@@ -44,14 +212,24 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
       SPRING_DATASOURCE_USERNAME: degree_user
       SPRING_DATASOURCE_PASSWORD: degree_password
-      # Disable blockchain for testing
-      FABRIC_NETWORK_CONFIG_PATH: ""
-      FABRIC_WALLET_PATH: ""
+      # Real blockchain configuration
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-attestation.yaml
+      FABRIC_WALLET_PATH: /app/wallets/attestation
+      FABRIC_USER_ID: attestation-admin
+      FABRIC_ORGANIZATION_NAME: AttestationMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
     ports:
       - "8080:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/attestation.degree.com/connection-attestation.yaml:/app/config/connection-attestation.yaml
+      - ./fabric-network/wallets/attestation:/app/wallets/attestation
     depends_on:
       - postgres
       - redis
+      - peer0.attestation.degree.com
+      - peer0.university.degree.com
+      - peer0.employer.degree.com
     networks:
       - degree-network
     restart: unless-stopped
@@ -68,14 +246,24 @@ services:
       SPRING_DATASOURCE_USERNAME: degree_user
       SPRING_DATASOURCE_PASSWORD: degree_password
       UNIVERSITY_CODE: UNI001
-      # Disable blockchain for testing
-      FABRIC_NETWORK_CONFIG_PATH: ""
-      FABRIC_WALLET_PATH: ""
+      # Real blockchain configuration
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-university.yaml
+      FABRIC_WALLET_PATH: /app/wallets/university
+      FABRIC_USER_ID: university-admin
+      FABRIC_ORGANIZATION_NAME: UniversityMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
     ports:
       - "8081:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/university.degree.com/connection-university.yaml:/app/config/connection-university.yaml
+      - ./fabric-network/wallets/university:/app/wallets/university
     depends_on:
       - postgres
       - redis
+      - peer0.attestation.degree.com
+      - peer0.university.degree.com
+      - peer0.employer.degree.com
     networks:
       - degree-network
     restart: unless-stopped
@@ -91,38 +279,49 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
       SPRING_DATASOURCE_USERNAME: degree_user
       SPRING_DATASOURCE_PASSWORD: degree_password
-      # Disable blockchain for testing
-      FABRIC_NETWORK_CONFIG_PATH: ""
-      FABRIC_WALLET_PATH: ""
+      # Real blockchain configuration
+      FABRIC_NETWORK_CONFIG_PATH: /app/config/connection-employer.yaml
+      FABRIC_WALLET_PATH: /app/wallets/employer
+      FABRIC_USER_ID: employer-admin
+      FABRIC_ORGANIZATION_NAME: EmployerMSP
+      FABRIC_CHANNEL_NAME: degree-channel
+      FABRIC_CONTRACT_NAME: DegreeAttestationContract
     ports:
       - "8082:8080"
+    volumes:
+      - ./fabric-network/organizations/peerOrganizations/employer.degree.com/connection-employer.yaml:/app/config/connection-employer.yaml
+      - ./fabric-network/wallets/employer:/app/wallets/employer
     depends_on:
       - postgres
       - redis
+      - peer0.attestation.degree.com
+      - peer0.university.degree.com
+      - peer0.employer.degree.com
     networks:
       - degree-network
     restart: unless-stopped
 
   # API Gateway
-#  api-gateway:
-#    build:
-#      context: .
-#      dockerfile: applications/api-gateway/Dockerfile
-#    container_name: api-gateway
-#    environment:
-#      SPRING_PROFILES_ACTIVE: docker
-#      SPRING_REDIS_HOST: redis
-#      SPRING_REDIS_PORT: 6379
-#      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
-#      UNIVERSITY_PORTAL_URL: http://university-portal:8080
-#      EMPLOYER_PORTAL_URL: http://employer-portal:8080
-#    ports:
-#     - "8000:8080"
-#    depends_on:
-#      - redis
-#      - attestation-authority
-#      - university-portal
-#      - employer-portal
-#    networks:
-#      - degree-network
-#    restart: unless-stopped
+  api-gateway:
+    build:
+      context: .
+      dockerfile: applications/api-gateway/Dockerfile
+    container_name: api-gateway
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
+      UNIVERSITY_PORTAL_URL: http://university-portal:8080
+      EMPLOYER_PORTAL_URL: http://employer-portal:8080
+      JWT_SECRET: mySecretKey12345678901234567890123456789012345678901234567890
+    ports:
+      - "8000:8080"
+    depends_on:
+      - redis
+      - attestation-authority
+      - university-portal
+      - employer-portal
+    networks:
+      - degree-network
+    restart: unless-stopped

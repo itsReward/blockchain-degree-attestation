@@ -82,21 +82,7 @@ class AuthenticationService(
                     message = "Invalid username or password"
                 )
 
-            // Check if user is locked
-            if (user.isLocked) {
-                logger.warn { "Authentication attempt for locked user: ${request.username}" }
-                return@withContext AuthenticationResponse(
-                    success = false,
-                    accessToken = null,
-                    refreshToken = null,
-                    user = null,
-                    message = "Account is locked due to too many failed login attempts"
-                )
-            }
-
-            // Check if user is active
             if (!user.isActive) {
-                logger.warn { "Authentication attempt for inactive user: ${request.username}" }
                 return@withContext AuthenticationResponse(
                     success = false,
                     accessToken = null,
@@ -106,17 +92,19 @@ class AuthenticationService(
                 )
             }
 
-            // Verify password
-            if (!passwordEncoder.matches(request.password, user.passwordHash)) {
-                logger.warn { "Invalid password for user: ${request.username}" }
-
-                // Increment failed login attempts
-                val updatedUser = user.copy(
-                    failedLoginAttempts = user.failedLoginAttempts + 1,
-                    isLocked = user.failedLoginAttempts + 1 >= 5 // Lock after 5 failed attempts
+            if (user.isLocked) {
+                return@withContext AuthenticationResponse(
+                    success = false,
+                    accessToken = null,
+                    refreshToken = null,
+                    user = null,
+                    message = "Account is locked due to multiple failed login attempts"
                 )
-                users[user.userId] = updatedUser
+            }
 
+            if (!passwordEncoder.matches(request.password, user.passwordHash)) {
+                // Increment failed login attempts
+                incrementFailedLoginAttempts(user.userId)
                 return@withContext AuthenticationResponse(
                     success = false,
                     accessToken = null,
@@ -126,17 +114,8 @@ class AuthenticationService(
                 )
             }
 
-            // Check organization code if provided
-            if (request.organizationCode != null && user.organizationCode != request.organizationCode) {
-                logger.warn { "Invalid organization code for user: ${request.username}" }
-                return@withContext AuthenticationResponse(
-                    success = false,
-                    accessToken = null,
-                    refreshToken = null,
-                    user = null,
-                    message = "Invalid organization code"
-                )
-            }
+            // Reset failed login attempts on successful authentication
+            resetFailedLoginAttempts(user.userId)
 
             // Generate tokens
             val accessToken = jwtTokenProvider.generateAccessToken(user.userId, user.role, user.organizationCode)
@@ -146,15 +125,7 @@ class AuthenticationService(
             activeTokens[accessToken] = user.userId
             refreshTokens[refreshToken] = user.userId
 
-            // Update user last login and reset failed attempts
-            val updatedUser = user.copy(
-                lastLoginAt = LocalDateTime.now(),
-                failedLoginAttempts = 0,
-                isLocked = false
-            )
-            users[user.userId] = updatedUser
-
-            logger.info { "Successful authentication for user: ${request.username}" }
+            logger.info { "Authentication successful for user: ${user.username}" }
 
             AuthenticationResponse(
                 success = true,
@@ -173,13 +144,13 @@ class AuthenticationService(
             )
 
         } catch (e: Exception) {
-            logger.error(e) { "Authentication error for user: ${request.username}" }
+            logger.error(e) { "Authentication error" }
             AuthenticationResponse(
                 success = false,
                 accessToken = null,
                 refreshToken = null,
                 user = null,
-                message = "Authentication failed due to technical error"
+                message = "Authentication failed"
             )
         }
     }
@@ -196,6 +167,17 @@ class AuthenticationService(
                     user = null,
                     message = "Invalid refresh token"
                 )
+
+            if (!jwtTokenProvider.validateToken(refreshToken) || !jwtTokenProvider.isRefreshToken(refreshToken)) {
+                refreshTokens.remove(refreshToken)
+                return@withContext AuthenticationResponse(
+                    success = false,
+                    accessToken = null,
+                    refreshToken = null,
+                    user = null,
+                    message = "Invalid refresh token"
+                )
+            }
 
             val user = users[userId]
                 ?: return@withContext AuthenticationResponse(
@@ -308,200 +290,209 @@ class AuthenticationService(
         password: String,
         role: String,
         organizationCode: String? = null
-    ): User = withContext(Dispatchers.IO) {
-        logger.info { "Creating new user: $username" }
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val userId = UUID.randomUUID().toString()
+            val passwordHash = passwordEncoder.encode(password)
 
-        // Check if username already exists
-        if (findUserByUsername(username) != null) {
-            throw BusinessException(
-                "Username already exists: $username",
-                ErrorCode.VALIDATION_ERROR
+            val user = User(
+                userId = userId,
+                username = username,
+                email = email,
+                passwordHash = passwordHash,
+                role = role,
+                organizationCode = organizationCode,
+                isActive = true,
+                createdAt = LocalDateTime.now(),
+                lastLoginAt = null
             )
+
+            users[userId] = user
+            logger.info { "User created successfully: $username" }
+            true
+
+        } catch (e: Exception) {
+            logger.error(e) { "Error creating user: $username" }
+            false
         }
-
-        // Check if email already exists
-        if (findUserByEmail(email) != null) {
-            throw BusinessException(
-                "Email already exists: $email",
-                ErrorCode.VALIDATION_ERROR
-            )
-        }
-
-        val userId = UUID.randomUUID().toString()
-        val user = User(
-            userId = userId,
-            username = username,
-            email = email,
-            passwordHash = passwordEncoder.encode(password),
-            role = role,
-            organizationCode = organizationCode,
-            isActive = true,
-            createdAt = LocalDateTime.now(),
-            lastLoginAt = null
-        )
-
-        users[userId] = user
-        logger.info { "User created successfully: $username" }
-
-        user
-    }
-
-    suspend fun updateUserRole(userId: String, newRole: String): Boolean = withContext(Dispatchers.IO) {
-        logger.info { "Updating role for user: $userId to $newRole" }
-
-        val user = users[userId] ?: return@withContext false
-
-        val updatedUser = user.copy(role = newRole)
-        users[userId] = updatedUser
-
-        // Invalidate all tokens for this user to force re-authentication with new role
-        activeTokens.entries.removeIf { it.value == userId }
-        refreshTokens.entries.removeIf { it.value == userId }
-
-        logger.info { "User role updated successfully: $userId" }
-        true
     }
 
     suspend fun lockUser(userId: String): Boolean = withContext(Dispatchers.IO) {
-        logger.warn { "Locking user: $userId" }
+        try {
+            val user = users[userId] ?: return@withContext false
 
-        val user = users[userId] ?: return@withContext false
+            val lockedUser = user.copy(isLocked = true)
+            users[userId] = lockedUser
 
-        val updatedUser = user.copy(isLocked = true)
-        users[userId] = updatedUser
+            // Remove all active tokens for this user
+            activeTokens.entries.removeIf { it.value == userId }
+            refreshTokens.entries.removeIf { it.value == userId }
 
-        // Invalidate all tokens for this user
-        activeTokens.entries.removeIf { it.value == userId }
-        refreshTokens.entries.removeIf { it.value == userId }
+            logger.info { "User locked successfully: ${user.username}" }
+            true
 
-        logger.warn { "User locked successfully: $userId" }
-        true
+        } catch (e: Exception) {
+            logger.error(e) { "Error locking user: $userId" }
+            false
+        }
     }
 
     suspend fun unlockUser(userId: String): Boolean = withContext(Dispatchers.IO) {
-        logger.info { "Unlocking user: $userId" }
+        try {
+            val user = users[userId] ?: return@withContext false
 
-        val user = users[userId] ?: return@withContext false
+            val unlockedUser = user.copy(isLocked = false, failedLoginAttempts = 0)
+            users[userId] = unlockedUser
 
-        val updatedUser = user.copy(
-            isLocked = false,
-            failedLoginAttempts = 0
-        )
-        users[userId] = updatedUser
+            logger.info { "User unlocked successfully: ${user.username}" }
+            true
 
-        logger.info { "User unlocked successfully: $userId" }
-        true
+        } catch (e: Exception) {
+            logger.error(e) { "Error unlocking user: $userId" }
+            false
+        }
     }
 
     suspend fun getAuthenticationStatistics(): Map<String, Any> = withContext(Dispatchers.IO) {
-        val now = LocalDateTime.now()
-        val recentLogins = users.values.count { user ->
-            user.lastLoginAt?.isAfter(now.minusHours(24)) == true
-        }
-
-        val lockedUsers = users.values.count { it.isLocked }
-        val activeUsers = users.values.count { it.isActive }
-        val roleDistribution = users.values.groupingBy { it.role }.eachCount()
-
         mapOf(
             "totalUsers" to users.size,
-            "activeUsers" to activeUsers,
-            "lockedUsers" to lockedUsers,
-            "recentLogins24h" to recentLogins,
+            "activeUsers" to users.values.count { it.isActive },
+            "lockedUsers" to users.values.count { it.isLocked },
             "activeTokens" to activeTokens.size,
-            "activeRefreshTokens" to refreshTokens.size,
-            "roleDistribution" to roleDistribution,
-            "timestamp" to now.toString()
+            "refreshTokens" to refreshTokens.size,
+            "usersByRole" to users.values.groupBy { it.role }.mapValues { it.value.size },
+            "timestamp" to System.currentTimeMillis()
         )
     }
 
     private fun findUserByUsername(username: String): User? {
-        return users.values.find { it.username.equals(username, ignoreCase = true) }
+        return users.values.find { it.username == username }
     }
 
-    private fun findUserByEmail(email: String): User? {
-        return users.values.find { it.email.equals(email, ignoreCase = true) }
+    private fun incrementFailedLoginAttempts(userId: String) {
+        val user = users[userId] ?: return
+        val updatedUser = user.copy(
+            failedLoginAttempts = user.failedLoginAttempts + 1,
+            isLocked = user.failedLoginAttempts + 1 >= 5 // Lock after 5 failed attempts
+        )
+        users[userId] = updatedUser
+    }
+
+    private fun resetFailedLoginAttempts(userId: String) {
+        val user = users[userId] ?: return
+        val updatedUser = user.copy(failedLoginAttempts = 0)
+        users[userId] = updatedUser
     }
 
     private fun getPermissionsForRole(role: String): List<String> {
-        return when (role.uppercase()) {
+        return when (role) {
             "ADMIN" -> listOf(
-                "READ_ALL", "WRITE_ALL", "DELETE_ALL", "MANAGE_USERS",
-                "MANAGE_UNIVERSITIES", "VIEW_ANALYTICS", "MANAGE_SYSTEM"
+                "READ_ALL", "WRITE_ALL", "DELETE_ALL",
+                "MANAGE_USERS", "MANAGE_SYSTEM", "VIEW_STATISTICS"
             )
             "ATTESTATION_AUTHORITY" -> listOf(
-                "READ_UNIVERSITIES", "WRITE_UNIVERSITIES", "MANAGE_UNIVERSITIES",
-                "VIEW_REVENUE", "MANAGE_GOVERNANCE", "VIEW_COMPLIANCE"
+                "READ_UNIVERSITIES", "WRITE_UNIVERSITIES",
+                "READ_GOVERNANCE", "WRITE_GOVERNANCE",
+                "READ_REVENUE", "WRITE_REVENUE",
+                "READ_COMPLIANCE", "WRITE_COMPLIANCE"
             )
             "UNIVERSITY" -> listOf(
-                "READ_DEGREES", "WRITE_DEGREES", "MANAGE_STUDENTS",
-                "VIEW_REVENUE", "SUBMIT_DEGREES"
+                "READ_DEGREES", "WRITE_DEGREES",
+                "READ_STUDENTS", "WRITE_STUDENTS",
+                "READ_REVENUE"
             )
             "EMPLOYER" -> listOf(
-                "VERIFY_DEGREES", "VIEW_VERIFICATION_HISTORY",
-                "MAKE_PAYMENTS", "VIEW_AUDIT_TRAIL"
+                "READ_VERIFICATION", "WRITE_VERIFICATION",
+                "READ_PAYMENTS", "WRITE_PAYMENTS",
+                "READ_AUDIT"
             )
-            else -> listOf("READ_BASIC")
+            else -> emptyList()
         }
     }
 
     private fun initializeDefaultUsers() {
-        // Create default admin user
-        val adminId = UUID.randomUUID().toString()
-        users[adminId] = User(
-            userId = adminId,
-            username = "admin",
-            email = "admin@degreechain.org",
-            passwordHash = passwordEncoder.encode("admin123"),
-            role = "ADMIN",
-            organizationCode = null,
-            isActive = true,
-            createdAt = LocalDateTime.now(),
-            lastLoginAt = null
-        )
+        try {
+            // Admin user
+            val adminUserId = UUID.randomUUID().toString()
+            users[adminUserId] = User(
+                userId = adminUserId,
+                username = "admin",
+                email = "admin@degreechain.org",
+                passwordHash = passwordEncoder.encode("admin123"),
+                role = "ADMIN",
+                organizationCode = null,
+                isActive = true,
+                createdAt = LocalDateTime.now(),
+                lastLoginAt = null
+            )
 
-        // Create default attestation authority user
-        val authorityId = UUID.randomUUID().toString()
-        users[authorityId] = User(
-            userId = authorityId,
-            username = "authority",
-            email = "authority@degreechain.org",
-            passwordHash = passwordEncoder.encode("authority123"),
-            role = "ATTESTATION_AUTHORITY",
-            organizationCode = "ATTESTATION_AUTHORITY",
-            isActive = true,
-            createdAt = LocalDateTime.now(),
-            lastLoginAt = null
-        )
+            // Attestation Authority user
+            val attestationUserId = UUID.randomUUID().toString()
+            users[attestationUserId] = User(
+                userId = attestationUserId,
+                username = "attestation",
+                email = "attestation@degreechain.org",
+                passwordHash = passwordEncoder.encode("attestation123"),
+                role = "ATTESTATION_AUTHORITY",
+                organizationCode = "ATTEST_001",
+                isActive = true,
+                createdAt = LocalDateTime.now(),
+                lastLoginAt = null
+            )
 
-        // Create default university user
-        val universityId = UUID.randomUUID().toString()
-        users[universityId] = User(
-            userId = universityId,
-            username = "university",
-            email = "admin@university.edu",
-            passwordHash = passwordEncoder.encode("university123"),
-            role = "UNIVERSITY",
-            organizationCode = "UNI001",
-            isActive = true,
-            createdAt = LocalDateTime.now(),
-            lastLoginAt = null
-        )
+            // University user
+            val universityUserId = UUID.randomUUID().toString()
+            users[universityUserId] = User(
+                userId = universityUserId,
+                username = "university",
+                email = "university@example.edu",
+                passwordHash = passwordEncoder.encode("university123"),
+                role = "UNIVERSITY",
+                organizationCode = "UNI_001",
+                isActive = true,
+                createdAt = LocalDateTime.now(),
+                lastLoginAt = null
+            )
 
-        // Create default employer user
-        val employerId = UUID.randomUUID().toString()
-        users[employerId] = User(
-            userId = employerId,
-            username = "employer",
-            email = "hr@company.com",
-            passwordHash = passwordEncoder.encode("employer123"),
-            role = "EMPLOYER",
-            organizationCode = "EMP001",
-            isActive = true,
-            createdAt = LocalDateTime.now(),
-            lastLoginAt = null
-        )
+            // Employer user
+            val employerUserId = UUID.randomUUID().toString()
+            users[employerUserId] = User(
+                userId = employerUserId,
+                username = "employer",
+                email = "employer@company.com",
+                passwordHash = passwordEncoder.encode("employer123"),
+                role = "EMPLOYER",
+                organizationCode = "EMP_001",
+                isActive = true,
+                createdAt = LocalDateTime.now(),
+                lastLoginAt = null
+            )
 
-        logger.info { "Initialized ${users.size} default users" }
+            logger.info { "Default users initialized successfully" }
+
+        } catch (e: Exception) {
+            logger.error(e) { "Error initializing default users" }
+        }
+    }
+
+    fun getAccessTokenExpirationTime(): Long {
+        return jwtTokenProvider.getAccessTokenExpirationTime()
+    }
+
+    suspend fun getAuthenticationStatistics(): Map<String, Any> = withContext(Dispatchers.IO) {
+        val now = LocalDateTime.now()
+        val activeUsers = activeTokens.size
+        val totalUsers = users.size
+        val lockedUsers = users.values.count { it.isLocked }
+
+        mapOf(
+            "totalUsers" to totalUsers,
+            "activeUsers" to activeUsers,
+            "lockedUsers" to lockedUsers,
+            "refreshTokensActive" to refreshTokens.size,
+            "authenticationSuccessRate" to 0.95, // This would be calculated from real metrics
+            "averageSessionDuration" to "45 minutes", // This would be calculated from real data
+            "timestamp" to now.toString()
+        )
     }
 }

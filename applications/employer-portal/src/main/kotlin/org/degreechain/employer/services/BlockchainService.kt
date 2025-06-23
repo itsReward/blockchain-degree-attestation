@@ -196,7 +196,7 @@ class BlockchainService(
         logger.debug { "Checking blockchain health" }
 
         try {
-            val healthStatus = healthChecker.checkDetailedHealth()
+            val healthStatus = healthChecker.getDetailedStatus()
 
             safeMapOf(
                 "overall" to healthStatus,
