@@ -12,7 +12,8 @@ private val logger = KotlinLogging.logger {}
 @Service
 class RateLimitingService(
     private val redisTemplate: RedisTemplate<String, String>
-) {
+)
+{
 
     companion object {
         private const val RATE_LIMIT_PREFIX = "rate_limit:"
@@ -65,6 +66,11 @@ class RateLimitingService(
         }
     }
 
+    fun getAllClientStatistics(){
+
+    }
+
+
     fun getRateLimitInfo(clientId: String, endpoint: String = "default"): Map<String, Any> {
         val key = "$RATE_LIMIT_PREFIX$clientId:$endpoint"
         val window = getTimeWindow()
@@ -115,12 +121,8 @@ class RateLimitingService(
         val nextMinute = now.plusMinutes(1).withSecond(0).withNano(0)
         return Duration.between(now, nextMinute).seconds
     }
+
+
 }
 
-data class RateLimitResult(
-    val allowed: Boolean,
-    val currentCount: Int,
-    val limit: Int,
-    val resetTime: String,
-    val retryAfter: Long?
-)
+

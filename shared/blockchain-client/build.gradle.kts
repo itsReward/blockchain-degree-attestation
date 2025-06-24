@@ -1,15 +1,23 @@
-// shared/blockchain-client/build.gradle.kts
 plugins {
     kotlin("jvm")
     kotlin("plugin.spring")
     `java-library`
+    `maven-publish`
+}
+
+group = "org.degreechain"
+version = "1.0.0"
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
     // Shared common module
     api(project(":shared:common"))
 
-    // LEGACY: Hyperledger Fabric Gateway Java SDK (deprecated but working)
+    // LEGACY: Hyperledger Fabric Gateway Java SDK
     api("org.hyperledger.fabric:fabric-gateway-java:2.2.0")
     api("io.grpc:grpc-netty-shaded:1.58.0")
 
@@ -36,4 +44,12 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test:3.2.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("org.testcontainers:junit-jupiter:1.19.3")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
 }

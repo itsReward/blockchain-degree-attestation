@@ -4,32 +4,31 @@ import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.degreechain.common.models.ApiResponse
 import org.degreechain.gateway.services.AuthenticationService
-import org.degreechain.gateway.services.RateLimitingService
 import org.degreechain.gateway.services.RoutingService
+import org.degreechain.gateway.services.UserInfo
+import org.degreechain.gateway.services.AuthenticationRequest
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import jakarta.servlet.http.HttpServletRequest
-import org.degreechain.common.exceptions.BusinessException
-import org.degreechain.common.models.ErrorCode
-import java.time.LocalDateTime
+import org.degreechain.gateway.services.RateLimitingService
 
 private val logger = KotlinLogging.logger {}
 
 @RestController
 @RequestMapping("/api/v1")
-class PublicApiController(
+class PublicApiController(  // Fixed: Changed from GatewayController to PublicApiController
     private val authenticationService: AuthenticationService,
     private val rateLimitingService: RateLimitingService,
     private val routingService: RoutingService
 ) {
 
     @PostMapping("/auth/login")
-    suspend fun login(@RequestBody request: Map<String, String>): ResponseEntity<ApiResponse<Any>> {
+    suspend fun login(@RequestBody request: Map<String, String>): ResponseEntity<ApiResponse<Map<String, Any>>> {
         return try {
-            val authRequest = org.degreechain.gateway.services.AuthenticationRequest(
+            val authRequest = AuthenticationRequest(
                 username = request["username"] ?: throw IllegalArgumentException("Username is required"),
                 password = request["password"] ?: throw IllegalArgumentException("Password is required"),
                 organizationCode = request["organizationCode"]
@@ -38,28 +37,26 @@ class PublicApiController(
             val result = authenticationService.authenticate(authRequest)
 
             if (result.success) {
-                ResponseEntity.ok(ApiResponse.success(
-                    data = mapOf(
-                        "accessToken" to result.accessToken,
-                        "refreshToken" to result.refreshToken,
-                        "user" to result.user,
-                        "expiresIn" to result.expiresIn
-                    ),
-                    message = result.message
-                ))
+                val responseData = mapOf(
+                    "accessToken" to result.accessToken,
+                    "refreshToken" to result.refreshToken,
+                    "user" to result.user,
+                    "expiresIn" to result.expiresIn
+                )
+                ResponseEntity.ok(ApiResponse.success(responseData, result.message))
             } else {
                 ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(ApiResponse.error<Any>(result.message))
+                    .body(ApiResponse.error<Map<String, Any>>(result.message))
             }
         } catch (e: Exception) {
             logger.error(e) { "Login error" }
             ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error<Any>("Login failed: ${e.message}"))
-        }
+                .body(ApiResponse.error<Map<String, Any>>("Login failed: ${e.message}"))
+        } as ResponseEntity<ApiResponse<Map<String, Any>>>
     }
 
     @PostMapping("/auth/refresh")
-    suspend fun refreshToken(@RequestBody request: Map<String, String>): ResponseEntity<ApiResponse<Any>> {
+    suspend fun refreshToken(@RequestBody request: Map<String, String>): ResponseEntity<ApiResponse<Map<String, Any>>> {  // Fixed: Changed from Any to Map<String, Any>
         return try {
             val refreshToken = request["refreshToken"]
                 ?: throw IllegalArgumentException("Refresh token is required")
@@ -67,24 +64,22 @@ class PublicApiController(
             val result = authenticationService.refreshToken(refreshToken)
 
             if (result.success) {
-                ResponseEntity.ok(ApiResponse.success(
-                    data = mapOf(
-                        "accessToken" to result.accessToken,
-                        "refreshToken" to result.refreshToken,
-                        "user" to result.user,
-                        "expiresIn" to result.expiresIn
-                    ),
-                    message = result.message
-                ))
+                val responseData = mapOf(
+                    "accessToken" to result.accessToken,
+                    "refreshToken" to result.refreshToken,
+                    "user" to result.user,
+                    "expiresIn" to result.expiresIn
+                )
+                ResponseEntity.ok(ApiResponse.success(responseData, result.message))
             } else {
                 ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(ApiResponse.error<Any>(result.message))
+                    .body(ApiResponse.error<Map<String, Any>>(result.message))
             }
         } catch (e: Exception) {
             logger.error(e) { "Token refresh error" }
             ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error<Any>("Token refresh failed: ${e.message}"))
-        }
+                .body(ApiResponse.error<Map<String, Any>>("Token refresh failed: ${e.message}"))
+        } as ResponseEntity<ApiResponse<Map<String, Any>>>
     }
 
     @PostMapping("/auth/logout")
@@ -108,17 +103,7 @@ class PublicApiController(
         }
     }
 
-    @GetMapping("/health")
-    suspend fun health(): ResponseEntity<ApiResponse<Map<String, Any>>> {
-        return try {
-            val healthStatus = routingService.getAllServicesHealth()
-            ResponseEntity.ok(ApiResponse.success(healthStatus, "Gateway health check"))
-        } catch (e: Exception) {
-            logger.error(e) { "Health check error" }
-            ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ApiResponse.error("Health check failed: ${e.message}"))
-        }
-    }
+
 
     @GetMapping("/admin/statistics")
     suspend fun getStatistics(
@@ -146,14 +131,76 @@ class PublicApiController(
         } catch (e: Exception) {
             logger.error(e) { "Statistics error" }
             ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error("Access denied or error retrieving statistics"))
+                .body(ApiResponse.error<Map<String, Any>>("Access denied or error retrieving statistics"))
         }
     }
+
+    @PostMapping("/admin/users/{userId}/lock")
+    suspend fun lockUser(
+        @PathVariable userId: String,
+        @RequestHeader("Authorization") authorization: String?
+    ): ResponseEntity<ApiResponse<String>> {
+        return try {
+            validateAdminAccess(authorization)
+
+            val success = authenticationService.lockUser(userId)
+            if (success) {
+                ResponseEntity.ok(ApiResponse.success("User locked: $userId"))
+            } else {
+                ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("User not found: $userId"))
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "User lock error" }
+            ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error("Access denied or error locking user"))
+        }
+    }
+
+    @PostMapping("/admin/users/{userId}/unlock")
+    suspend fun unlockUser(
+        @PathVariable userId: String,
+        @RequestHeader("Authorization") authorization: String?
+    ): ResponseEntity<ApiResponse<String>> {
+        return try {
+            validateAdminAccess(authorization)
+
+            val success = authenticationService.unlockUser(userId)
+            if (success) {
+                ResponseEntity.ok(ApiResponse.success("User unlocked: $userId"))
+            } else {
+                ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("User not found: $userId"))
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "User unlock error" }
+            ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error("Access denied or error unlocking user"))
+        }
+    }
+/*
+    @GetMapping("/admin/rate-limit/violations")
+    suspend fun getRateLimitViolations(
+        @RequestParam(defaultValue = "24") hours: Int,
+        @RequestHeader("Authorization") authorization: String?
+    ): ResponseEntity<ApiResponse<Map<String, Any>>> {
+        return try {
+            validateAdminAccess(authorization)
+
+            val violations = rateLimitingService.getViolationReport(hours)
+            ResponseEntity.ok(ApiResponse.success(violations, "Rate limit violations report"))
+        } catch (e: Exception) {
+            logger.error(e) { "Violations report error" }
+            ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error<Map<String, Any>>("Access denied or error retrieving violations"))
+        }
+    }
+    */
 
     @RequestMapping("/**")
     suspend fun routeRequest(
         @RequestHeader headers: HttpHeaders,
-        @RequestBody(required = false) body: Any?,
+        @RequestBody(required = false) body: String?,  // Fixed: Changed from Any? to String?
         request: HttpServletRequest
     ): ResponseEntity<String> {
 
@@ -171,105 +218,47 @@ class PublicApiController(
             val rateLimitResult = rateLimitingService.checkRateLimit(
                 clientId = clientId,
                 endpoint = path,
-                userRole = user?.role
             )
 
             if (!rateLimitResult.allowed) {
                 logger.warn { "Rate limit exceeded for client: $clientId on $path" }
                 return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .responseHeaders.set("X-RateLimit-Limit", rateLimitResult.currentRequests?.toString() ?: "0")
-                    .responseHeaders.set("X-RateLimit-Remaining", rateLimitResult.remainingRequests.toString())
-                    .responseHeaders.set("X-RateLimit-Reset", rateLimitResult.resetTime?.toString() ?: "")
+                    .body("Rate limit exceeded. Try again later.")
             }
-
-            // Add rate limit headers to response
-            val responseHeaders = HttpHeaders()
-            responseHeaders.set("X-RateLimit-Limit", rateLimitResult.currentRequests.toString())
-            responseHeaders.set("X-RateLimit-Remaining", rateLimitResult.remainingRequests.toString())
-            responseHeaders.set("X-RateLimit-Reset", rateLimitResult.resetTime.toString())
 
             // Check authentication for protected endpoints
-            if (requiresAuthentication(path)) {
-                if (user == null) {
-                    logger.warn { "Unauthenticated access attempt to protected endpoint: $path" }
-                    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body("Authentication required")
-                }
-
-                // Check authorization
-                if (!hasPermission(user, path, method)) {
-                    logger.warn { "Unauthorized access attempt by user ${user.username} to $path" }
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body("Insufficient permissions")
-                }
+            if (requiresAuthentication(path) && user == null) {
+                logger.warn { "Unauthenticated access attempt to $path" }
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body("Authentication required")
             }
 
-            // Route the request
-            val response = routingService.routeRequest(path, method, headers, body)
+            // Check authorization for role-based endpoints
+            if (user != null && !hasPermission(user, path, method)) {
+                logger.warn { "Unauthorized access attempt by ${user.username} to $path" }
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("Access denied")
+            }
 
-            // Add custom headers to response
-            val finalHeaders = HttpHeaders()
-            finalHeaders.addAll(response.headers)
-            finalHeaders.addAll(responseHeaders)
-
-            ResponseEntity.status(response.statusCode)
-                .headers(finalHeaders)
-                .body(response.body)
+            // Route to appropriate service
+            routeToService(path, method, headers, body)
 
         } catch (e: Exception) {
-            logger.error(e) { "Error routing request: $method $path" }
+            logger.error(e) { "Routing error for $method $path" }
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body("Gateway error: ${e.message}")
+                .body("Gateway routing error: ${e.message}")
         }
     }
 
-    @PostMapping("/admin/rate-limit/reset/{clientId}")
-    suspend fun resetRateLimit(
-        @PathVariable clientId: String,
-        @RequestHeader("Authorization") authorization: String?
-    ): ResponseEntity<ApiResponse<String>> {
-        return try {
-            validateAdminAccess(authorization)
-
-            val success = rateLimitingService.resetClientLimit(clientId)
-            if (success) {
-                ResponseEntity.ok(ApiResponse.success("Rate limit reset for client: $clientId"))
-            } else {
-                ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResponse.error("Client not found: $clientId"))
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Rate limit reset error" }
-            ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error("Access denied or error resetting rate limit"))
+    // Helper methods
+    private fun extractTokenFromHeader(authorization: String?): String {
+        if (authorization.isNullOrBlank() || !authorization.startsWith("Bearer ")) {
+            throw IllegalArgumentException("Invalid authorization header")
         }
+        return authorization.substring(7)
     }
 
-    @PostMapping("/admin/users/{userId}/lock")
-    suspend fun lockUser(
-        @PathVariable userId: String,
-        @RequestHeader("Authorization") authorization: String?
-    ): ResponseEntity<ApiResponse<String>> {
-        return try {
-            validateAdminAccess(authorization)
-
-            val success = authenticationService.lockUser(userId)
-            if (success) {
-                ResponseEntity.ok(ApiResponse.success("User locked successfully: $userId"))
-            } else {
-                ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResponse.error("User not found: $userId"))
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "User lock error" }
-            ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error("Access denied or error locking user"))
-        }
-    }
-
-    private suspend fun validateAdminAccess(
-        authorization: String?
-    ): org.degreechain.gateway.services.UserInfo {
+    private suspend fun validateAdminAccess(authorization: String?): UserInfo {
         val token = extractTokenFromHeader(authorization)
         val user = authenticationService.validateToken(token)
             ?: throw SecurityException("Invalid or expired token")
@@ -281,48 +270,37 @@ class PublicApiController(
         return user
     }
 
-    private suspend fun extractUserFromHeaders(headers: HttpHeaders): org.degreechain.gateway.services.UserInfo? {
-        return try {
-            val authorization = headers.getFirst("Authorization")
-            if (authorization != null) {
+    private suspend fun extractUserFromHeaders(headers: HttpHeaders): UserInfo? {
+        val authorization = headers.getFirst("Authorization")
+        return if (authorization != null) {
+            try {
                 val token = extractTokenFromHeader(authorization)
                 authenticationService.validateToken(token)
-            } else {
+            } catch (e: Exception) {
+                logger.debug { "Failed to extract user from headers: ${e.message}" }
                 null
             }
-        } catch (e: Exception) {
-            logger.debug { "Token validation failed: ${e.message}" }
-            null
-        }
-    }
-
-    private fun extractTokenFromHeader(authorization: String?): String {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw IllegalArgumentException("Invalid authorization header")
-        }
-        return authorization.substring(7)
+        } else null
     }
 
     private fun getClientId(request: HttpServletRequest, headers: HttpHeaders): String {
         // Try to get client ID from various sources
-        headers.getFirst("X-Client-ID")?.let { return it }
-        request.getHeader("X-Forwarded-For")?.let { return it.split(",")[0].trim() }
-        request.remoteAddr?.let { return it }
-        return "unknown"
+        return headers.getFirst("X-Client-ID")
+            ?: request.remoteAddr
+            ?: "unknown"
     }
 
     private fun requiresAuthentication(path: String): Boolean {
-        val publicEndpoints = listOf(
+        val publicPaths = setOf(
             "/api/v1/auth/login",
             "/api/v1/auth/refresh",
             "/api/v1/health",
-            "/api/v1/verification/public" // If you have public verification endpoints
+            "/api/v1/verification/verify" // Public verification endpoint
         )
-
-        return !publicEndpoints.any { path.startsWith(it) }
+        return !publicPaths.contains(path) && !path.startsWith("/api/v1/public/")
     }
 
-    private fun hasPermission(user: org.degreechain.gateway.services.UserInfo, path: String, method: HttpMethod): Boolean {
+    private fun hasPermission(user: UserInfo, path: String, method: HttpMethod): Boolean {
         // Admin has access to everything
         if (user.role == "ADMIN") {
             return true
@@ -355,6 +333,38 @@ class PublicApiController(
         }
     }
 
+    private suspend fun routeToService(
+        path: String,
+        method: HttpMethod,
+        headers: HttpHeaders,
+        body: String?
+    ): ResponseEntity<String> {
+        return when {
+            path.startsWith("/api/v1/universities") ||
+                    path.startsWith("/api/v1/governance") ||
+                    path.startsWith("/api/v1/revenue") ||
+                    path.startsWith("/api/v1/compliance") -> {
+                routingService.routeToAttestationAuthority(path, method, headers, body)
+            }
+
+            path.startsWith("/api/v1/degrees") ||
+                    path.startsWith("/api/v1/students") -> {
+                routingService.routeToUniversityPortal(path, method, headers, body)
+            }
+
+            path.startsWith("/api/v1/verification") ||
+                    path.startsWith("/api/v1/payments") ||
+                    path.startsWith("/api/v1/audit") -> {
+                routingService.routeToEmployerPortal(path, method, headers, body)
+            }
+
+            else -> {
+                ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("Service not found for path: $path")
+            }
+        }
+    }
+
     private fun getUptimeInfo(): Map<String, Any> {
         val runtime = Runtime.getRuntime()
         val mb = 1024 * 1024
@@ -376,88 +386,5 @@ class PublicApiController(
         logger.error(e) { "Unhandled gateway exception" }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
             .body(ApiResponse.error("Gateway error: ${e.message}"))
-    }
-
-    private fun extractTokenFromHeader(authorization: String?): String {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw IllegalArgumentException("Invalid authorization header")
-        }
-        return authorization.substring(7)
-    }
-
-    private suspend fun validateAdminAccess(authorization: String?): UserInfo {
-        val token = extractTokenFromHeader(authorization)
-        val user = authenticationService.validateToken(token)
-            ?: throw BusinessException("Invalid or expired token", ErrorCode.UNAUTHORIZED)
-
-        if (user.role != "ADMIN") {
-            throw BusinessException("Admin access required", ErrorCode.FORBIDDEN)
-        }
-
-        return user
-    }
-
-    private suspend fun extractUserFromHeaders(headers: HttpHeaders): UserInfo? {
-        val authorization = headers.getFirst("Authorization") ?: return null
-        return try {
-            val token = extractTokenFromHeader(authorization)
-            authenticationService.validateToken(token)
-        } catch (e: Exception) {
-            logger.debug { "Failed to extract user from headers: ${e.message}" }
-            null
-        }
-    }
-
-    private fun getClientId(request: HttpServletRequest, headers: HttpHeaders): String {
-        // Try to get client ID from header first
-        headers.getFirst("X-Client-Id")?.let { return it }
-
-        // Fall back to IP address
-        val xForwardedFor = headers.getFirst("X-Forwarded-For")
-        return if (!xForwardedFor.isNullOrEmpty()) {
-            xForwardedFor.split(",")[0].trim()
-        } else {
-            request.remoteAddr
-        }
-    }
-
-    private fun requiresAuthentication(path: String): Boolean {
-        val publicPaths = listOf(
-            "/api/v1/auth/login",
-            "/api/v1/auth/refresh",
-            "/api/v1/health",
-            "/api/v1/public"
-        )
-
-        return publicPaths.none { path.startsWith(it) }
-    }
-
-    private fun hasPermission(user: UserInfo, path: String, method: HttpMethod): Boolean {
-        // Admin has access to everything
-        if (user.role == "ADMIN") return true
-
-        // Check specific permissions based on path and method
-        return when {
-            path.startsWith("/api/v1/admin") -> false // Only admins
-            path.startsWith("/api/v1/universities") && method != HttpMethod.GET -> user.role == "UNIVERSITY"
-            path.startsWith("/api/v1/degrees") -> user.role in listOf("UNIVERSITY", "STUDENT")
-            path.startsWith("/api/v1/verification") -> user.role == "EMPLOYER"
-            else -> true // Allow for other paths
-        }
-    }
-
-    private fun getUptimeInfo(): Map<String, Any> {
-        val runtime = Runtime.getRuntime()
-        val uptime = System.currentTimeMillis() // In production, track actual start time
-
-        return mapOf(
-            "startTime" to LocalDateTime.now().minusHours(24).toString(), // Mock data
-            "uptime" to "24 hours", // Mock data
-            "memory" to mapOf(
-                "used" to "${runtime.totalMemory() - runtime.freeMemory()} bytes",
-                "total" to "${runtime.totalMemory()} bytes",
-                "max" to "${runtime.maxMemory()} bytes"
-            )
-        )
     }
 }

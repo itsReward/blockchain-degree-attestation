@@ -16,8 +16,8 @@ COPY applications/api-gateway applications/api-gateway
 RUN chmod +x gradlew
 RUN ./gradlew :applications:api-gateway:build -x test
 
-# Copy the built jar (use the main application jar)
-RUN cp applications/api-gateway/build/libs/api-gateway-*.jar app.jar
+# Copy the built jar (find the main application jar, excluding plain jars)
+RUN find applications/api-gateway/build/libs/ -name "*.jar" -not -name "*-plain.jar" -exec cp {} app.jar \;
 
 # Expose port
 EXPOSE 8080

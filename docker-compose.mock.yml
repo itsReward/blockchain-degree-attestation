@@ -1,0 +1,161 @@
+# Docker Compose for quick testing with mock blockchain
+networks:
+  degree-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: degree-postgres
+    environment:
+      POSTGRES_DB: degree_attestation
+      POSTGRES_USER: degree_user
+      POSTGRES_PASSWORD: degree_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - degree-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U degree_user -d degree_attestation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: degree-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - degree-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Attestation Authority Application (Mock Blockchain)
+  attestation-authority:
+    build:
+      context: .
+      dockerfile: applications/attestation-authority/Dockerfile
+    container_name: attestation-authority
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      # Empty blockchain config triggers mock implementation
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "AttestationMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # University Portal (Mock Blockchain)
+  university-portal:
+    build:
+      context: .
+      dockerfile: applications/university-portal/Dockerfile
+    container_name: university-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      UNIVERSITY_CODE: UNI001
+      # Empty blockchain config triggers mock implementation
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "UniversityMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Employer Portal (Mock Blockchain)
+  employer-portal:
+    build:
+      context: .
+      dockerfile: applications/employer-portal/Dockerfile
+    container_name: employer-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      # Empty blockchain config triggers mock implementation
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "EmployerMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: applications/api-gateway/Dockerfile
+    container_name: api-gateway
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      ATTESTATION_AUTHORITY_URL: http://attestation-authority:8080
+      UNIVERSITY_PORTAL_URL: http://university-portal:8080
+      EMPLOYER_PORTAL_URL: http://employer-portal:8080
+      JWT_SECRET: mySecretKey12345678901234567890123456789012345678901234567890
+    ports:
+      - "8000:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      attestation-authority:
+        condition: service_started
+      university-portal:
+        condition: service_started
+      employer-portal:
+        condition: service_started
+    networks:
+      - degree-network
+    restart: unless-stopped

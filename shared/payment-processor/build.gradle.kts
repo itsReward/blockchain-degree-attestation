@@ -1,8 +1,16 @@
-// shared/payment-processor/build.gradle.kts
 plugins {
     kotlin("jvm")
     kotlin("plugin.spring")
     `java-library`
+    `maven-publish`
+}
+
+group = "org.degreechain"
+version = "1.0.0"
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
@@ -34,4 +42,12 @@ dependencies {
     // Testing
     testImplementation("org.springframework.boot:spring-boot-starter-test:3.2.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
 }

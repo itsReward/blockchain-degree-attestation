@@ -3,8 +3,6 @@ package org.degreechain.gateway.services
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
-import org.degreechain.common.exceptions.BusinessException
-import org.degreechain.common.models.ErrorCode
 import org.degreechain.gateway.security.JwtTokenProvider
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
@@ -351,18 +349,6 @@ class AuthenticationService(
             logger.error(e) { "Error unlocking user: $userId" }
             false
         }
-    }
-
-    suspend fun getAuthenticationStatistics(): Map<String, Any> = withContext(Dispatchers.IO) {
-        mapOf(
-            "totalUsers" to users.size,
-            "activeUsers" to users.values.count { it.isActive },
-            "lockedUsers" to users.values.count { it.isLocked },
-            "activeTokens" to activeTokens.size,
-            "refreshTokens" to refreshTokens.size,
-            "usersByRole" to users.values.groupBy { it.role }.mapValues { it.value.size },
-            "timestamp" to System.currentTimeMillis()
-        )
     }
 
     private fun findUserByUsername(username: String): User? {

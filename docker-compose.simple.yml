@@ -1,0 +1,107 @@
+# Docker Compose without API Gateway
+networks:
+  degree-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: degree-postgres
+    environment:
+      POSTGRES_DB: degree_attestation
+      POSTGRES_USER: degree_user
+      POSTGRES_PASSWORD: degree_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: degree-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Attestation Authority Application
+  attestation-authority:
+    image: blockchain-degree-attestation-attestation-authority:latest
+    container_name: attestation-authority
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "AttestationMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # University Portal
+  university-portal:
+    image: blockchain-degree-attestation-university-portal:latest
+    container_name: university-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      UNIVERSITY_CODE: UNI001
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "UniversityMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - degree-network
+    restart: unless-stopped
+
+  # Employer Portal
+  employer-portal:
+    image: blockchain-degree-attestation-employer-portal:latest
+    container_name: employer-portal
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/degree_attestation
+      SPRING_DATASOURCE_USERNAME: degree_user
+      SPRING_DATASOURCE_PASSWORD: degree_password
+      FABRIC_NETWORK_CONFIG_PATH: ""
+      FABRIC_WALLET_PATH: ""
+      FABRIC_USER_ID: "mock-admin"
+      FABRIC_ORGANIZATION_NAME: "EmployerMSP"
+      FABRIC_CHANNEL_NAME: "degree-channel"
+      FABRIC_CONTRACT_NAME: "DegreeAttestationContract"
+    ports:
+      - "8082:8080"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - degree-network
+    restart: unless-stopped

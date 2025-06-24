@@ -3,6 +3,7 @@ package org.degreechain.gateway.security
 import io.jsonwebtoken.*
 import io.jsonwebtoken.security.Keys
 import mu.KotlinLogging
+import org.degreechain.gateway.security.logger
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.security.Key
@@ -224,5 +225,13 @@ class JwtTokenProvider {
             logger.debug(e) { "Error extracting permissions from token" }
             null
         }
+    }
+
+    /**
+     * Returns the access token expiration time in seconds
+     * @return Access token expiration time in seconds
+     */
+    fun getAccessTokenExpirationTime(): Long {
+        return accessTokenExpiration / 1000 // Convert milliseconds to seconds
     }
 }

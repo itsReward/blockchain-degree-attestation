@@ -108,4 +108,12 @@ class RoutingService(
             "timestamp" to System.currentTimeMillis()
         )
     }
+
+    fun getAllServicesHealth(){
+
+    }
+
+    fun getRoutingStatistics(){
+
+    }
 }
