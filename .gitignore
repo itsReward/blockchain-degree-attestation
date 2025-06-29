@@ -1,2 +1,6 @@
 .idea
 .gradle
+applications/api-gateway/build
+applications/employer-portal/build
+applications/attestation-authority/build
+applications/university-portal/build
