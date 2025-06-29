@@ -35,5 +35,7 @@ enum class ErrorCode(val code: String, val description: String) {
     INTERNAL_SERVER_ERROR("SYSTEM_001", "Internal server error"),
     SERVICE_UNAVAILABLE("SYSTEM_002", "Service temporarily unavailable"),
     RATE_LIMIT_EXCEEDED("SYSTEM_003", "Rate limit exceeded"),
-    MAINTENANCE_MODE("SYSTEM_004", "System under maintenance")
+    MAINTENANCE_MODE("SYSTEM_004", "System under maintenance"),
+    FILE_PROCESSING_ERROR("SYSTEM_005", "File processing error"),
+
 }

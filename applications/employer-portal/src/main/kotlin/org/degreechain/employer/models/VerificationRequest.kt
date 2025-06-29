@@ -1,8 +1,9 @@
 package org.degreechain.employer.models
 
-import com.fasterxml.jackson.annotation.JsonFormat
-import java.time.LocalDateTime
-import jakarta.validation.constraints.*
+import jakarta.validation.constraints.Email
+import jakarta.validation.constraints.Min
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Pattern
 
 data class VerificationRequest(
     @field:NotBlank(message = "Certificate number is required")
@@ -11,19 +12,20 @@ data class VerificationRequest(
     @field:NotBlank(message = "Verifier organization is required")
     val verifierOrganization: String,
 
-    @field:Email(message = "Invalid email format")
     @field:NotBlank(message = "Verifier email is required")
+    @field:Email(message = "Invalid email format")
     val verifierEmail: String,
-
-    @field:NotBlank(message = "Payment method is required")
-    val paymentMethod: String,
 
     @field:Min(value = 1, message = "Payment amount must be positive")
     val paymentAmount: Double,
 
-    val providedHash: String? = null,
-    val additionalNotes: String? = null,
+    @field:NotBlank(message = "Payment method is required")
+    @field:Pattern(
+        regexp = "^(CREDIT_CARD|BANK_TRANSFER|CRYPTO)$",
+        message = "Invalid payment method"
+    )
+    val paymentMethod: String,
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
-    val requestTimestamp: LocalDateTime = LocalDateTime.now()
+    val providedHash: String? = null,
+    val additionalNotes: String? = null
 )

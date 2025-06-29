@@ -29,3 +29,12 @@ data class ApiResponse<T>(
         }
     }
 }
+
+/**
+ * Error details for API responses
+ */
+data class ErrorDetails(
+    val code: String,
+    val message: String,
+    val details: Map<String, Any>? = null
+)

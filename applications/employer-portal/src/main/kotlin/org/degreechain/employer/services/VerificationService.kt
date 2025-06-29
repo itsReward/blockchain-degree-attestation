@@ -5,6 +5,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import mu.KotlinLogging
 import org.degreechain.blockchain.ContractInvoker
 import org.degreechain.common.exceptions.BusinessException
@@ -13,10 +15,16 @@ import org.degreechain.common.models.VerificationStatus
 import org.degreechain.common.utils.ValidationUtils
 import org.degreechain.employer.models.VerificationRequest
 import org.degreechain.employer.models.VerificationResult
+import org.degreechain.employer.controllers.BatchVerificationRequest
+import org.degreechain.employer.controllers.BatchVerificationResult
+import org.degreechain.employer.controllers.BatchVerificationError
+import org.degreechain.employer.controllers.VerificationCostEstimate
 import org.springframework.stereotype.Service
+import org.springframework.web.multipart.MultipartFile
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
+import kotlin.math.max
 
 private val logger = KotlinLogging.logger {}
 
@@ -27,6 +35,8 @@ class VerificationService(
 ) {
     private val objectMapper = ObjectMapper().registerKotlinModule()
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+
+    val random = java.util.Random()
 
     private fun safeMapOf(vararg pairs: Pair<String, Any?>): Map<String, Any> {
         return pairs.mapNotNull { (key, value) ->
@@ -46,7 +56,8 @@ class VerificationService(
             val paymentResult = paymentService.processVerificationPayment(
                 amount = request.paymentAmount,
                 paymentMethod = request.paymentMethod,
-                certificateNumber = request.certificateNumber
+                certificateNumber = request.certificateNumber,
+                organizationName = request.verifierOrganization
             )
 
             if (!paymentResult.success) {
@@ -92,134 +103,497 @@ class VerificationService(
                 verificationTimestamp = LocalDateTime.now(),
                 paymentAmount = request.paymentAmount,
                 paymentId = paymentResult.paymentId,
-                extractionMethod = verificationData["extractionMethod"] as? String,
-                additionalInfo = extractAdditionalInfo(verificationData)
+                extractionMethod = verificationData["extractionMethod"] as? String
             )
 
-            logger.info { "Degree verification completed successfully: ${result.verificationId}" }
+            logger.info { "Degree verification completed successfully for certificate: ${request.certificateNumber}" }
             result
 
-        } catch (e: BusinessException) {
-            logger.error(e) { "Degree verification failed: ${request.certificateNumber}" }
-            throw e
         } catch (e: Exception) {
-            logger.error(e) { "Unexpected error during degree verification: ${request.certificateNumber}" }
+            logger.error(e) { "Degree verification failed for certificate: ${request.certificateNumber}" }
             throw BusinessException(
-                "Verification failed due to technical error: ${e.message}",
+                "Verification failed: ${e.message}",
                 ErrorCode.INTERNAL_SERVER_ERROR,
                 cause = e
             )
         }
     }
 
-    suspend fun batchVerifyDegrees(requests: List<VerificationRequest>): List<VerificationResult> = withContext(Dispatchers.IO) {
-        logger.info { "Starting batch verification for ${requests.size} certificates" }
+    /**
+     * Batch verify multiple degrees
+     */
+    suspend fun batchVerifyDegrees(request: BatchVerificationRequest): BatchVerificationResult = withContext(Dispatchers.IO) {
+        logger.info { "Starting batch verification for ${request.verificationRequests.size} certificates" }
 
+        val startTime = System.currentTimeMillis()
         val results = mutableListOf<VerificationResult>()
-        var successCount = 0
-        var failureCount = 0
+        val errors = mutableListOf<BatchVerificationError>()
+        var totalCost = 0.0
 
-        requests.forEach { request ->
-            try {
-                val result = verifyDegree(request)
-                results.add(result)
+        try {
+            // Process verifications with limited concurrency
+            val chunks = request.verificationRequests.chunked(request.maxConcurrentVerifications)
 
-                if (result.verificationStatus == VerificationStatus.VERIFIED) {
-                    successCount++
-                } else {
-                    failureCount++
+            for (chunk in chunks) {
+                val chunkResults = chunk.map { verificationRequest ->
+                    async {
+                        try {
+                            val result = verifyDegree(verificationRequest)
+                            totalCost += result.paymentAmount
+                            result
+                        } catch (e: Exception) {
+                            logger.error(e) { "Failed to verify certificate: ${verificationRequest.certificateNumber}" }
+                            errors.add(
+                                BatchVerificationError(
+                                    certificateNumber = verificationRequest.certificateNumber,
+                                    errorMessage = e.message ?: "Unknown error",
+                                    errorCode = when (e) {
+                                        is BusinessException -> e.errorCode.name
+                                        else -> ErrorCode.INTERNAL_SERVER_ERROR.name
+                                    }
+                                )
+                            )
+
+                            if (!request.continueOnError) {
+                                throw e
+                            }
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+
+                results.addAll(chunkResults)
+
+                if (!request.continueOnError && errors.isNotEmpty()) {
+                    break
                 }
-            } catch (e: Exception) {
-                logger.warn(e) { "Failed to verify certificate in batch: ${request.certificateNumber}" }
-
-                // Create failed result
-                val failedResult = VerificationResult(
-                    verificationId = UUID.randomUUID().toString(),
-                    certificateNumber = request.certificateNumber,
-                    verificationStatus = VerificationStatus.FAILED,
-                    confidence = 0.0,
-                    verifierOrganization = request.verifierOrganization,
-                    verifierEmail = request.verifierEmail,
-                    verificationTimestamp = LocalDateTime.now(),
-                    paymentAmount = request.paymentAmount,
-                    additionalInfo = mapOf("error" to (e.message ?: "Unknown error"))
-                )
-
-                results.add(failedResult)
-                failureCount++
             }
-        }
 
-        logger.info { "Batch verification completed: $successCount successful, $failureCount failed" }
-        results
+            val processingTime = System.currentTimeMillis() - startTime
+
+            BatchVerificationResult(
+                totalRequested = request.verificationRequests.size,
+                successfulVerifications = results.size,
+                failedVerifications = errors.size,
+                totalCost = totalCost,
+                processingTime = processingTime,
+                results = results,
+                errors = errors
+            )
+
+        } catch (e: Exception) {
+            logger.error(e) { "Batch verification failed" }
+            throw BusinessException(
+                "Batch verification failed: ${e.message}",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
+        }
     }
 
+    /**
+     * Process file upload verification
+     */
+    suspend fun processFileUploadVerification(
+        file: MultipartFile,
+        organizationName: String,
+        paymentMethod: String
+    ): BatchVerificationResult = withContext(Dispatchers.IO) {
+        logger.info { "Processing file upload verification for organization: $organizationName" }
+
+        try {
+            // Validate file
+            if (file.isEmpty) {
+                throw BusinessException("File is empty", ErrorCode.VALIDATION_ERROR)
+            }
+
+            val allowedTypes = setOf("text/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            if (file.contentType !in allowedTypes) {
+                throw BusinessException(
+                    "Unsupported file type. Only CSV and Excel files are supported.",
+                    ErrorCode.VALIDATION_ERROR
+                )
+            }
+
+            // Parse file and extract verification requests
+            val verificationRequests = parseVerificationFile(file, organizationName, paymentMethod)
+
+            // Process batch verification
+            val batchRequest = BatchVerificationRequest(
+                verificationRequests = verificationRequests,
+                continueOnError = true,
+                maxConcurrentVerifications = 5
+            )
+
+            batchVerifyDegrees(batchRequest)
+
+        } catch (e: Exception) {
+            logger.error(e) { "File upload verification failed" }
+            throw BusinessException(
+                "File verification failed: ${e.message}",
+                ErrorCode.FILE_PROCESSING_ERROR,
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Get verification result by ID
+     */
+    suspend fun getVerificationResult(verificationId: String): VerificationResult = withContext(Dispatchers.IO) {
+        logger.info { "Retrieving verification result: $verificationId" }
+
+        try {
+            ValidationUtils.validateRequired(verificationId, "Verification ID")
+
+            // In a real implementation, this would query the database
+            // For now, return a mock result
+            VerificationResult(
+                verificationId = verificationId,
+                certificateNumber = "CERT-${UUID.randomUUID().toString().substring(0, 8)}",
+                verificationStatus = VerificationStatus.VERIFIED,
+                confidence = 0.95,
+                studentName = "John Doe",
+                degreeName = "Bachelor of Science in Computer Science",
+                facultyName = "Faculty of Engineering",
+                degreeClassification = "First Class Honours",
+                issuanceDate = "2023-06-15",
+                universityName = "University of Technology",
+                universityCode = "UNITECH",
+                verifierOrganization = "TechCorp",
+                verifierEmail = "hr@techcorp.com",
+                verificationTimestamp = LocalDateTime.now(),
+                paymentAmount = 10.0,
+                paymentId = "PAY-${UUID.randomUUID().toString().substring(0, 8)}",
+                extractionMethod = "BLOCKCHAIN_VERIFICATION"
+            )
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get verification result: $verificationId" }
+            throw BusinessException(
+                "Verification result not found",
+                ErrorCode.RESOURCE_NOT_FOUND,
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Get verification history with filtering
+     */
     suspend fun getVerificationHistory(
         organizationName: String,
         page: Int,
         size: Int,
-        status: VerificationStatus?
-    ): Map<String, Any> = withContext(Dispatchers.IO) {
-        logger.debug { "Retrieving verification history for organization: $organizationName" }
+        status: VerificationStatus?,
+        startDate: String?,
+        endDate: String?,
+        certificateNumber: String?
+    ): List<VerificationResult> = withContext(Dispatchers.IO) {
+        logger.info { "Retrieving verification history for organization: $organizationName" }
 
-        // In a real implementation, this would query verification history from blockchain or database
-        // For now, return mock data structure
-        val mockHistory = generateMockVerificationHistory(organizationName, status)
+        try {
+            ValidationUtils.validateRequired(organizationName, "Organization Name")
 
-        val startIndex = page * size
-        val endIndex = minOf(startIndex + size, mockHistory.size)
-        val paginatedHistory = if (startIndex < mockHistory.size) {
-            mockHistory.subList(startIndex, endIndex)
-        } else {
-            emptyList()
+            // Generate mock history data
+            val mockHistory = generateMockVerificationHistory(organizationName, status)
+
+            // Apply filters
+            var filteredHistory = mockHistory.toList()
+
+            if (!certificateNumber.isNullOrBlank()) {
+                filteredHistory = filteredHistory.filter {
+                    it.certificateNumber.contains(certificateNumber, ignoreCase = true)
+                }
+            }
+
+            if (!startDate.isNullOrBlank()) {
+                val start = LocalDateTime.parse(startDate)
+                filteredHistory = filteredHistory.filter { it.verificationTimestamp.isAfter(start) }
+            }
+
+            if (!endDate.isNullOrBlank()) {
+                val end = LocalDateTime.parse(endDate)
+                filteredHistory = filteredHistory.filter { it.verificationTimestamp.isBefore(end) }
+            }
+
+            // Apply pagination
+            val offset = page * size
+            filteredHistory.drop(offset).take(size)
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get verification history for: $organizationName" }
+            throw BusinessException(
+                "Failed to retrieve verification history",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
         }
-
-        safeMapOf(
-            "verifications" to paginatedHistory,
-            "page" to page,
-            "size" to size,
-            "totalElements" to mockHistory.size,
-            "totalPages" to (mockHistory.size + size - 1) / size,
-            "hasNext" to (endIndex < mockHistory.size),
-            "hasPrevious" to (page > 0),
-            "filterStatus" to status?.name
-        )
     }
 
-    suspend fun getVerificationStatistics(organizationName: String): Map<String, Any> = withContext(Dispatchers.IO) {
-        logger.debug { "Retrieving verification statistics for organization: $organizationName" }
+    /**
+     * Get verification analytics
+     */
+    suspend fun getVerificationAnalytics(
+        organizationName: String,
+        startDate: String?,
+        endDate: String?
+    ): Map<String, Any> = withContext(Dispatchers.IO) {
+        logger.info { "Retrieving verification analytics for organization: $organizationName" }
 
-        // In a real implementation, this would aggregate verification data
-        val mockHistory = generateMockVerificationHistory(organizationName, null)
+        try {
+            ValidationUtils.validateRequired(organizationName, "Organization Name")
 
-        val totalVerifications = mockHistory.size
-        val successfulVerifications = mockHistory.count {
-            (it["verificationStatus"] as String) == "VERIFIED"
+            val mockHistory = generateMockVerificationHistory(organizationName, null)
+
+            // Calculate analytics
+            val totalVerifications = mockHistory.size
+            val successfulVerifications = mockHistory.count { it.verificationStatus == VerificationStatus.VERIFIED }
+            val failedVerifications = mockHistory.count { it.verificationStatus == VerificationStatus.FAILED }
+            val pendingVerifications = mockHistory.count { it.verificationStatus == VerificationStatus.PENDING }
+
+            val successRate = if (totalVerifications > 0) {
+                (successfulVerifications.toDouble() / totalVerifications) * 100
+            } else 0.0
+
+            val totalSpent = mockHistory.sumOf { it.paymentAmount }
+            val averageConfidence = mockHistory.map { it.confidence }.average()
+
+            // Group by university
+            val universityBreakdown = mockHistory.groupBy { it.universityName ?: "Unknown" }
+                .mapValues { (_, verifications) ->
+                    mapOf(
+                        "count" to verifications.size,
+                        "successRate" to if (verifications.isNotEmpty()) {
+                            (verifications.count { it.verificationStatus == VerificationStatus.VERIFIED }.toDouble() / verifications.size) * 100
+                        } else 0.0
+                    )
+                }
+
+            // Trend data (last 30 days)
+            val now = LocalDateTime.now()
+            val trendData = (0..29).map { daysAgo ->
+                val date = now.minusDays(daysAgo.toLong())
+                val dayVerifications = mockHistory.filter {
+                    it.verificationTimestamp.toLocalDate() == date.toLocalDate()
+                }
+                mapOf(
+                    "date" to date.toLocalDate().toString(),
+                    "verifications" to dayVerifications.size,
+                    "successfulVerifications" to dayVerifications.count { it.verificationStatus == VerificationStatus.VERIFIED }
+                )
+            }.reversed()
+
+            mapOf(
+                "summary" to mapOf(
+                    "totalVerifications" to totalVerifications,
+                    "successfulVerifications" to successfulVerifications,
+                    "failedVerifications" to failedVerifications,
+                    "pendingVerifications" to pendingVerifications,
+                    "successRate" to successRate,
+                    "totalAmountSpent" to totalSpent,
+                    "averageConfidence" to averageConfidence,
+                    "averageCostPerVerification" to if (totalVerifications > 0) totalSpent / totalVerifications else 0.0
+                ),
+                "universityBreakdown" to universityBreakdown,
+                "trendData" to trendData,
+                "degreeTypeDistribution" to mockHistory.groupBy { it.degreeName ?: "Unknown" }
+                    .mapValues { it.value.size },
+                "confidenceDistribution" to mapOf(
+                    "high" to mockHistory.count { it.confidence >= 0.9 },
+                    "medium" to mockHistory.count { it.confidence in 0.7..0.89 },
+                    "low" to mockHistory.count { it.confidence < 0.7 }
+                )
+            )
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get verification analytics for: $organizationName" }
+            throw BusinessException(
+                "Failed to retrieve verification analytics",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
         }
-        val failedVerifications = totalVerifications - successfulVerifications
-        val successRate = if (totalVerifications > 0) {
-            successfulVerifications.toDouble() / totalVerifications
-        } else {
-            0.0
-        }
+    }
 
-        val totalSpent = mockHistory.sumOf {
-            (it["paymentAmount"] as? Number)?.toDouble() ?: 0.0
-        }
+    /**
+     * Re-verify a degree
+     */
+    suspend fun reVerifyDegree(
+        verificationId: String,
+        enhancedExtraction: Boolean,
+        additionalNotes: String?
+    ): VerificationResult = withContext(Dispatchers.IO) {
+        logger.info { "Re-verifying degree for verification ID: $verificationId" }
 
-        safeMapOf(
-            "organizationName" to organizationName,
-            "totalVerifications" to totalVerifications,
-            "successfulVerifications" to successfulVerifications,
-            "failedVerifications" to failedVerifications,
-            "successRate" to successRate,
-            "totalAmountSpent" to totalSpent,
-            "averageCostPerVerification" to if (totalVerifications > 0) totalSpent / totalVerifications else 0.0,
-            "lastVerificationDate" to mockHistory.maxByOrNull {
-                it["verificationTimestamp"] as String
-            }?.get("verificationTimestamp"),
-            "mostVerifiedUniversity" to findMostVerifiedUniversity(mockHistory)
-        )
+        try {
+            ValidationUtils.validateRequired(verificationId, "Verification ID")
+
+            // Get original verification
+            val originalVerification = getVerificationResult(verificationId)
+
+            // Create new verification request based on original
+            val reVerificationRequest = VerificationRequest(
+                certificateNumber = originalVerification.certificateNumber,
+                verifierOrganization = originalVerification.verifierOrganization,
+                verifierEmail = originalVerification.verifierEmail,
+                paymentAmount = originalVerification.paymentAmount * 0.5, // Re-verification discount
+                paymentMethod = "CREDIT_CARD", // Default method for re-verification
+                providedHash = null,
+                additionalNotes = additionalNotes
+            )
+
+            // Perform re-verification
+            val reVerificationResult = verifyDegree(reVerificationRequest)
+
+            logger.info { "Re-verification completed for verification ID: $verificationId" }
+            reVerificationResult
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to re-verify degree for verification ID: $verificationId" }
+            throw BusinessException(
+                "Re-verification failed: ${e.message}",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Estimate verification cost
+     */
+    suspend fun estimateVerificationCost(
+        certificateCount: Int,
+        paymentMethod: String,
+        bulkDiscount: Boolean
+    ): VerificationCostEstimate = withContext(Dispatchers.IO) {
+        logger.info { "Estimating verification cost for $certificateCount certificates" }
+
+        try {
+            val baseCostPerVerification = 10.0
+
+            // Calculate bulk discount
+            val bulkDiscountRate = if (bulkDiscount && certificateCount >= 10) {
+                when {
+                    certificateCount >= 100 -> 0.25
+                    certificateCount >= 50 -> 0.20
+                    certificateCount >= 25 -> 0.15
+                    else -> 0.10
+                }
+            } else 0.0
+
+            val discountedCostPerVerification = baseCostPerVerification * (1 - bulkDiscountRate)
+            val subtotal = discountedCostPerVerification * certificateCount
+            val bulkDiscountAmount = baseCostPerVerification * certificateCount * bulkDiscountRate
+
+            // Payment method fees
+            val paymentMethodFees = mapOf(
+                "CREDIT_CARD" to subtotal * 0.029, // 2.9% fee
+                "BANK_TRANSFER" to max(2.0, subtotal * 0.01), // $2 minimum or 1%
+                "CRYPTO" to subtotal * 0.015 // 1.5% fee
+            )
+
+            val paymentFee = paymentMethodFees[paymentMethod] ?: 0.0
+            val totalCost = subtotal + paymentFee
+
+            // Estimated processing time
+            val estimatedProcessingTime = when {
+                certificateCount <= 10 -> "5-10 minutes"
+                certificateCount <= 50 -> "30-60 minutes"
+                certificateCount <= 100 -> "2-4 hours"
+                else -> "4-8 hours"
+            }
+
+            VerificationCostEstimate(
+                totalCertificates = certificateCount,
+                costPerVerification = discountedCostPerVerification,
+                bulkDiscount = bulkDiscountAmount,
+                totalCost = totalCost,
+                estimatedProcessingTime = estimatedProcessingTime,
+                paymentMethodFees = paymentMethodFees,
+                breakdown = mapOf(
+                    "baseCost" to baseCostPerVerification * certificateCount,
+                    "bulkDiscountRate" to bulkDiscountRate,
+                    "subtotal" to subtotal,
+                    "paymentFee" to paymentFee,
+                    "finalTotal" to totalCost
+                )
+            )
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to estimate verification cost" }
+            throw BusinessException(
+                "Cost estimation failed: ${e.message}",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
+        }
+    }
+
+    /**
+     * Get dashboard statistics
+     */
+    suspend fun getDashboardStats(
+        organizationName: String,
+        days: Int
+    ): Map<String, Any> = withContext(Dispatchers.IO) {
+        logger.info { "Retrieving dashboard stats for organization: $organizationName (last $days days)" }
+
+        try {
+            ValidationUtils.validateRequired(organizationName, "Organization Name")
+
+            val cutoffDate = LocalDateTime.now().minusDays(days.toLong())
+            val mockHistory = generateMockVerificationHistory(organizationName, null)
+                .filter { it.verificationTimestamp.isAfter(cutoffDate) }
+
+            val totalVerifications = mockHistory.size
+            val successfulVerifications = mockHistory.count { it.verificationStatus == VerificationStatus.VERIFIED }
+            val pendingVerifications = mockHistory.count { it.verificationStatus == VerificationStatus.PENDING }
+            val totalSpent = mockHistory.sumOf { it.paymentAmount }
+
+            // Recent activity (last 7 days)
+            val recentActivity = (0..6).map { daysAgo ->
+                val date = LocalDateTime.now().minusDays(daysAgo.toLong())
+                val dayVerifications = mockHistory.filter {
+                    it.verificationTimestamp.toLocalDate() == date.toLocalDate()
+                }
+                mapOf(
+                    "date" to date.toLocalDate().toString(),
+                    "count" to dayVerifications.size
+                )
+            }.reversed()
+
+            // Top universities
+            val topUniversities = mockHistory.groupBy { it.universityName ?: "Unknown" }
+                .mapValues { it.value.size }
+                .toList()
+                .sortedByDescending { it.second }
+                .take(5)
+                .map { mapOf("university" to it.first, "count" to it.second) }
+
+            mapOf(
+                "totalVerifications" to totalVerifications,
+                "successfulVerifications" to successfulVerifications,
+                "pendingVerifications" to pendingVerifications,
+                "successRate" to if (totalVerifications > 0) (successfulVerifications.toDouble() / totalVerifications) * 100 else 0.0,
+                "totalSpent" to totalSpent,
+                "averageCostPerVerification" to if (totalVerifications > 0) totalSpent / totalVerifications else 0.0,
+                "recentActivity" to recentActivity,
+                "topUniversities" to topUniversities,
+                "lastVerificationDate" to mockHistory.maxByOrNull { it.verificationTimestamp }?.verificationTimestamp?.toString(),
+                "period" to "${days} days"
+            ) as Map<String, Any>
+
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get dashboard stats for: $organizationName" }
+            throw BusinessException(
+                "Failed to retrieve dashboard statistics",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                cause = e
+            )
+            // This line is never reached due to throw
+            emptyMap<String, Any>() // But would fix the type mismatch if reached
+        }
     }
 
     suspend fun downloadVerificationReport(
@@ -235,6 +609,110 @@ class VerificationService(
         val csvContent = generateCsvReport(history, startDate, endDate)
 
         csvContent.toByteArray()
+    }
+
+    // Helper methods
+
+    private fun parseVerificationFile(
+        file: MultipartFile,
+        organizationName: String,
+        paymentMethod: String
+    ): List<VerificationRequest> {
+        val content = String(file.bytes)
+        val lines = content.split("\n").filter { it.isNotBlank() }
+
+        if (lines.isEmpty()) {
+            throw BusinessException("File is empty or invalid", ErrorCode.VALIDATION_ERROR)
+        }
+
+        // Assume CSV format: certificateNumber,verifierEmail,paymentAmount
+        val verificationRequests = mutableListOf<VerificationRequest>()
+
+        lines.drop(1).forEachIndexed { index, line ->
+            try {
+                val parts = line.split(",").map { it.trim() }
+                if (parts.size >= 3) {
+                    verificationRequests.add(
+                        VerificationRequest(
+                            certificateNumber = parts[0],
+                            verifierOrganization = organizationName,
+                            verifierEmail = parts[1],
+                            paymentAmount = parts[2].toDouble(),
+                            paymentMethod = paymentMethod
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                logger.warn { "Failed to parse line ${index + 1}: $line" }
+            }
+        }
+
+        if (verificationRequests.isEmpty()) {
+            throw BusinessException("No valid verification requests found in file", ErrorCode.VALIDATION_ERROR)
+        }
+
+        return verificationRequests
+    }
+
+    private fun generateMockVerificationHistory(
+        organizationName: String,
+        status: VerificationStatus?
+    ): List<VerificationResult> {
+        val statuses = listOf(VerificationStatus.VERIFIED, VerificationStatus.FAILED, VerificationStatus.PENDING)
+        val universities = listOf("University of Technology", "State University", "Technical College", "Business School")
+        val degrees = listOf("Bachelor of Science", "Master of Business Administration", "Doctor of Philosophy", "Bachelor of Arts")
+
+        return (1..50).map { i ->
+            val verificationStatus = status ?: statuses.random()
+            VerificationResult(
+                verificationId = "VER-${organizationName}-${i.toString().padStart(4, '0')}",
+                certificateNumber = "CERT-${i.toString().padStart(6, '0')}",
+                verificationStatus = verificationStatus,
+                confidence = when (verificationStatus) {
+                    VerificationStatus.VERIFIED -> 0.8 + random.nextDouble() * 0.2
+                    VerificationStatus.FAILED -> random.nextDouble() * 0.5
+                    else -> 0.5 + random.nextDouble() * 0.3
+                },
+                studentName = "Student $i",
+                degreeName = degrees.random(),
+                facultyName = "Faculty of ${listOf("Engineering", "Business", "Arts", "Science").random()}",
+                degreeClassification = listOf("First Class", "Second Class Upper", "Second Class Lower", "Third Class").random(),
+                issuanceDate = "202${(0..3).random()}-${(1..12).random().toString().padStart(2, '0')}-${(1..28).random().toString().padStart(2, '0')}",
+                universityName = universities.random(),
+                universityCode = "UNI${(100..999).random()}",
+                verifierOrganization = organizationName,
+                verifierEmail = "verifier$i@$organizationName.com",
+                verificationTimestamp = LocalDateTime.now().minusDays((0..60).random().toLong()),
+                paymentAmount = 5.0 + random.nextDouble() * 15.0,
+                paymentId = "PAY-${UUID.randomUUID().toString().substring(0, 8)}",
+                extractionMethod = listOf("BLOCKCHAIN_VERIFICATION", "OCR_EXTRACTION", "MANUAL_VERIFICATION").random()
+            )
+        }
+    }
+
+    private fun generateCsvReport(
+        history: List<VerificationResult>,
+        startDate: LocalDateTime?,
+        endDate: LocalDateTime?
+    ): String {
+        val filteredHistory = history.filter { verification ->
+            val timestamp = verification.verificationTimestamp
+            (startDate == null || timestamp.isAfter(startDate)) &&
+                    (endDate == null || timestamp.isBefore(endDate))
+        }
+
+        val csv = StringBuilder()
+        csv.appendLine("Verification ID,Certificate Number,Status,Confidence,Student Name,Degree Name,University,Verification Date,Payment Amount")
+
+        filteredHistory.forEach { verification ->
+            csv.appendLine(
+                "${verification.verificationId},${verification.certificateNumber},${verification.verificationStatus}," +
+                        "${verification.confidence},${verification.studentName},${verification.degreeName}," +
+                        "${verification.universityName},${verification.verificationTimestamp},${verification.paymentAmount}"
+            )
+        }
+
+        return csv.toString()
     }
 
     private fun validateVerificationRequest(request: VerificationRequest) {
@@ -253,92 +731,19 @@ class VerificationService(
         val validPaymentMethods = setOf("CREDIT_CARD", "BANK_TRANSFER", "CRYPTO")
         if (request.paymentMethod !in validPaymentMethods) {
             throw BusinessException(
-                "Invalid payment method. Must be one of: ${validPaymentMethods.joinToString()}",
+                "Invalid payment method. Supported methods: ${validPaymentMethods.joinToString()}",
                 ErrorCode.VALIDATION_ERROR
             )
         }
     }
 
-    private fun mapVerificationStatus(blockchainStatus: String): VerificationStatus {
-        return when (blockchainStatus.uppercase()) {
-            "VERIFIED" -> VerificationStatus.VERIFIED
-            "FAILED" -> VerificationStatus.FAILED
+    private fun mapVerificationStatus(status: String): VerificationStatus {
+        return when (status.uppercase()) {
+            "VERIFIED", "VALID", "SUCCESS" -> VerificationStatus.VERIFIED
+            "FAILED", "INVALID", "ERROR" -> VerificationStatus.FAILED
+            "PENDING", "IN_PROGRESS" -> VerificationStatus.PENDING
             "EXPIRED" -> VerificationStatus.EXPIRED
-            "REVOKED" -> VerificationStatus.REVOKED
             else -> VerificationStatus.FAILED
         }
-    }
-
-    private fun extractAdditionalInfo(verificationData: Map<String, Any>): Map<String, Any> {
-        return safeMapOf(
-            "verificationTimestamp" to verificationData["verificationTimestamp"],
-            "extractionMethod" to verificationData["extractionMethod"],
-            "blockchainTransactionId" to UUID.randomUUID().toString() // Mock transaction ID
-        )
-    }
-
-    private fun generateMockVerificationHistory(
-        organizationName: String,
-        statusFilter: VerificationStatus?
-    ): List<Map<String, Any>> {
-        val mockData = listOf(
-            safeMapOf(
-                "verificationId" to "ver_001",
-                "certificateNumber" to "BSc-12700",
-                "verificationStatus" to "VERIFIED",
-                "studentName" to "John Doe",
-                "degreeName" to "Bachelor of Science in Computer Science",
-                "universityName" to "University of Technology",
-                "verificationTimestamp" to LocalDateTime.now().minusDays(1).format(dateFormatter),
-                "paymentAmount" to 10.0
-            ),
-            safeMapOf(
-                "verificationId" to "ver_002",
-                "certificateNumber" to "MSc-45678",
-                "verificationStatus" to "VERIFIED",
-                "studentName" to "Jane Smith",
-                "degreeName" to "Master of Science in Data Science",
-                "universityName" to "Tech University",
-                "verificationTimestamp" to LocalDateTime.now().minusDays(3).format(dateFormatter),
-                "paymentAmount" to 15.0
-            ),
-            safeMapOf(
-                "verificationId" to "ver_003",
-                "certificateNumber" to "BSc-99999",
-                "verificationStatus" to "FAILED",
-                "verificationTimestamp" to LocalDateTime.now().minusDays(5).format(dateFormatter),
-                "paymentAmount" to 10.0
-            )
-        )
-
-        return if (statusFilter != null) {
-            mockData.filter { (it["verificationStatus"] as String) == statusFilter.name }
-        } else {
-            mockData
-        }
-    }
-
-    private fun findMostVerifiedUniversity(history: List<Map<String, Any>>): String? {
-        return history
-            .mapNotNull { it["universityName"] as? String }
-            .groupingBy { it }
-            .eachCount()
-            .maxByOrNull { it.value }
-            ?.key
-    }
-
-    private fun generateCsvReport(
-        history: List<Map<String, Any>>,
-        startDate: LocalDateTime?,
-        endDate: LocalDateTime?
-    ): String {
-        val header = "Verification ID,Certificate Number,Status,Student Name,Degree Name,University,Timestamp,Amount"
-        val rows = history.map { record ->
-            "${record["verificationId"]},${record["certificateNumber"]},${record["verificationStatus"]}," +
-                    "${record["studentName"] ?: ""},${record["degreeName"] ?: ""},${record["universityName"] ?: ""}," +
-                    "${record["verificationTimestamp"]},${record["paymentAmount"]}"
-        }
-
-        return (listOf(header) + rows).joinToString("\n")
     }
 }

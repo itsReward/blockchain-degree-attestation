@@ -94,4 +94,51 @@ object ValidationUtils {
         }
         return validated
     }
+
+    fun validatePhoneNumber(phoneNumber: String?) {
+        if (!phoneNumber.isNullOrBlank()) {
+            val phoneRegex = "^[+]?[1-9]\\d{1,14}$".toRegex()
+            if (!phoneNumber.matches(phoneRegex)) {
+                throw BusinessException("Invalid phone number format", ErrorCode.VALIDATION_ERROR)
+            }
+        }
+    }
+
+    fun validatePositiveAmount(amount: Double?, fieldName: String) {
+        if (amount == null || amount <= 0) {
+            throw BusinessException("$fieldName must be a positive number", ErrorCode.VALIDATION_ERROR)
+        }
+    }
+
+    fun validateDateRange(startDate: String?, endDate: String?) {
+        if (!startDate.isNullOrBlank() && !endDate.isNullOrBlank()) {
+            try {
+                val start = java.time.LocalDateTime.parse(startDate)
+                val end = java.time.LocalDateTime.parse(endDate)
+                if (start.isAfter(end)) {
+                    throw BusinessException("Start date must be before end date", ErrorCode.VALIDATION_ERROR)
+                }
+            } catch (e: java.time.format.DateTimeParseException) {
+                throw BusinessException("Invalid date format. Use ISO format (yyyy-MM-ddTHH:mm:ss)", ErrorCode.VALIDATION_ERROR)
+            }
+        }
+    }
+
+    fun validatePageParams(page: Int, size: Int) {
+        if (page < 0) {
+            throw BusinessException("Page number cannot be negative", ErrorCode.VALIDATION_ERROR)
+        }
+        if (size < 1 || size > 100) {
+            throw BusinessException("Page size must be between 1 and 100", ErrorCode.VALIDATION_ERROR)
+        }
+    }
+
+    fun validateEnumValue(value: String?, validValues: Set<String>, fieldName: String) {
+        if (!value.isNullOrBlank() && value !in validValues) {
+            throw BusinessException(
+                "$fieldName must be one of: ${validValues.joinToString(", ")}",
+                ErrorCode.VALIDATION_ERROR
+            )
+        }
+    }
 }

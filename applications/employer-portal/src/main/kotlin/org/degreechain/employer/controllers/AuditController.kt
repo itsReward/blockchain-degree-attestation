@@ -156,7 +156,7 @@ class AuditController(
         }
     }
 
-    @GetMapping("/reports/security")
+    /*@GetMapping("/reports/security")
     fun generateSecurityReport(
         @RequestParam organizationName: String,
         @RequestParam(required = false)
@@ -192,7 +192,7 @@ class AuditController(
                 )
             )
         }
-    }
+    }*/
 
     @GetMapping("/reports/audit-trail")
     fun downloadAuditTrail(
@@ -273,17 +273,3 @@ class AuditController(
         }
     }
 }
-
-data class LogAuditEventRequest(
-    val eventType: String,
-    val description: String,
-    val organizationName: String,
-    val userId: String? = null,
-    val ipAddress: String? = null,
-    val userAgent: String? = null,
-    val severity: String = "MEDIUM",
-    val category: String,
-    val metadata: Map<String, Any> = emptyMap(),
-    val resourceId: String? = null,
-    val outcome: String? = null
-)
