@@ -109,7 +109,7 @@ class DegreeController(
             logger.error("Error in degree submission", e)
             ApiUtils.logApiCall("/degrees/submit-with-processing", duration, false)
             ApiUtils.createErrorResponse("Submission failed: ${e.message}", "SUBMISSION_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<EnhancedDegreeSubmissionResult>>
     }
 
     /**
@@ -130,7 +130,7 @@ class DegreeController(
         } catch (e: Exception) {
             logger.error("Error getting processing status", e)
             ApiUtils.createErrorResponse("Failed to get status: ${e.message}", "STATUS_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<ProcessingStatus?>>
     }
 
     /**
@@ -189,7 +189,7 @@ class DegreeController(
             logger.error("Error in batch submission", e)
             ApiUtils.logApiCall("/degrees/batch-submit", duration, false)
             ApiUtils.createErrorResponse("Batch submission failed: ${e.message}", "BATCH_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<BatchVerificationResult>>
     }
 
     /**
@@ -227,7 +227,7 @@ class DegreeController(
         } catch (e: Exception) {
             logger.error("Error processing certificate", e)
             ApiUtils.createErrorResponse("Processing failed: ${e.message}", "PROCESSING_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<ProcessedCertificateResponse>>
     }
 
     /**
@@ -321,7 +321,7 @@ class DegreeController(
         } catch (e: Exception) {
             logger.error("Error getting VeryPhy statistics", e)
             ApiUtils.createErrorResponse("Failed to get statistics: ${e.message}", "STATS_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<VeryPhyApiStatistics>>
     }
 }
 

@@ -15,14 +15,7 @@ repositories {
         url = uri("https://hyperledger.jfrog.io/artifactory/fabric-maven")
     }
     // Only if needed and you have credentials
-    maven {
-        url = uri("https://jitpack.io")
-        credentials {
-            // Use project properties or system environment variables
-            username = project.findProperty("jitpackUsername") as String? ?: System.getenv("JITPACK_USERNAME") ?: ""
-            password = project.findProperty("jitpackToken") as String? ?: System.getenv("JITPACK_TOKEN") ?: ""
-        }
-    }
+
 }
 
 
@@ -52,8 +45,15 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.9")
     implementation("ch.qos.logback:logback-classic:1.4.14")
 
+    //kotlin coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+
+
     // Validation
-    implementation("org.apache.commons:commons-validator:1.7")
+    //implementation("org.apache.commons:commons-validator:1.7")
+    implementation("commons-validator:commons-validator:1.7")
+
+
 
     // Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")

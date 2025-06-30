@@ -78,7 +78,7 @@ class VerificationController(
             logger.error("Error in dual verification", e)
             ApiUtils.logApiCall("/verification/dual-verify", duration, false)
             ApiUtils.createErrorResponse("Verification failed: ${e.message}", "VERIFICATION_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<EnhancedVerificationResult>>
     }
 
     /**
@@ -112,7 +112,7 @@ class VerificationController(
         } catch (e: Exception) {
             logger.error("Error extracting certificate data", e)
             ApiUtils.createErrorResponse("Extraction failed: ${e.message}", "EXTRACTION_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<VerificationExtractionResponse>>
     }
 
     /**
@@ -215,7 +215,7 @@ class VerificationController(
             logger.error("Error in batch verification", e)
             ApiUtils.logApiCall("/verification/batch-verify", duration, false)
             ApiUtils.createErrorResponse("Batch verification failed: ${e.message}", "BATCH_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<BatchVerificationResult>>
     }
 
     /**
@@ -257,7 +257,7 @@ class VerificationController(
         } catch (e: Exception) {
             logger.error("Error retrieving verification history", e)
             ApiUtils.createErrorResponse("Failed to retrieve history: ${e.message}", "HISTORY_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<List<Map<String, Any>>>>
     }
 
     /**
@@ -281,7 +281,7 @@ class VerificationController(
         } catch (e: Exception) {
             logger.error("Error retrieving analytics", e)
             ApiUtils.createErrorResponse("Failed to retrieve analytics: ${e.message}", "ANALYTICS_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<SystemAnalytics>>
     }
 
     /**
@@ -324,7 +324,7 @@ class VerificationController(
         } catch (e: Exception) {
             logger.error("Error comparing certificate data", e)
             ApiUtils.createErrorResponse("Comparison failed: ${e.message}", "COMPARISON_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<CertificateComparisonResult>>
     }
 
     /**
@@ -348,7 +348,7 @@ class VerificationController(
         } catch (e: Exception) {
             logger.error("Error retrieving pricing", e)
             ApiUtils.createErrorResponse("Failed to retrieve pricing: ${e.message}", "PRICING_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<Map<String, Any>>>
     }
 
     // ========== PRIVATE HELPER METHODS ==========
