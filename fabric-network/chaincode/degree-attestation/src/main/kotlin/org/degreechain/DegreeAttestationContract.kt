@@ -3,13 +3,10 @@ package org.degreechain
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.degreechain.models.*
-import org.degreechain.utils.ValidationUtils
-import org.degreechain.utils.CryptoUtils
 import org.hyperledger.fabric.contract.Context
 import org.hyperledger.fabric.contract.ContractInterface
 import org.hyperledger.fabric.contract.annotation.*
 import org.hyperledger.fabric.shim.ChaincodeException
-import org.hyperledger.fabric.shim.ChaincodeStub
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
@@ -18,8 +15,8 @@ import java.util.*
     name = "DegreeAttestationContract",
     info = Info(
         title = "Degree Attestation Smart Contract",
-        description = "Smart contract for blockchain-based degree verification system",
-        version = "1.0.0"
+        description = "Smart contract for blockchain-based degree verification system with VeryPhy integration",
+        version = "2.0.0"
     )
 )
 @Default
@@ -34,9 +31,10 @@ class DegreeAttestationContract : ContractInterface {
         const val VERIFICATION_PREFIX = "VERIFICATION:"
         const val PAYMENT_PREFIX = "PAYMENT:"
         const val PROPOSAL_PREFIX = "PROPOSAL:"
+        const val HASH_PREFIX = "HASH:"
 
         const val ATTESTATION_ORG = "ATTESTATION_AUTHORITY"
-        const val VERIFICATION_FEE = 10.0 // Base verification fee
+        const val VERIFICATION_FEE = 10.0
         const val MINIMUM_STAKE = 1000.0
     }
 
@@ -51,476 +49,455 @@ class DegreeAttestationContract : ContractInterface {
             universityCode = ATTESTATION_ORG,
             universityName = "Blockchain Degree Attestation Authority",
             country = "Global",
-            address = "Decentralized Network",
-            contactEmail = "authority@degreechain.org",
-            publicKey = "ATTESTATION_AUTHORITY_PUBLIC_KEY",
-            stakeAmount = 0.0,
-            status = "ACTIVE",
-            joinedAt = getCurrentTimestamp(),
-            lastActive = getCurrentTimestamp()
+            contactEmail = "admin@attestation.org",
+            publicKey = "attestation_public_key",
+            registrationDate = LocalDateTime.now(),
+            isActive = true,
+            stake = 0.0,
+            totalEarnings = 0.0,
+            verificationCount = 0
         )
 
-        stub.putState(
-            UNIVERSITY_PREFIX + ATTESTATION_ORG,
-            objectMapper.writeValueAsBytes(attestationOrg)
+        val key = UNIVERSITY_PREFIX + ATTESTATION_ORG
+        stub.putState(key, objectMapper.writeValueAsBytes(attestationOrg))
+
+        // Set initialization event
+        ctx.stub.setEvent("LedgerInitialized", objectMapper.writeValueAsBytes(
+            mapOf("message" to "Degree Attestation ledger initialized with VeryPhy integration")
+        ))
+    }
+
+    // ========== NEW VERYPHY INTEGRATION FUNCTIONS ==========
+
+    @Transaction(intent = Transaction.TYPE.SUBMIT)
+    fun submitDegreeWithHash(
+        ctx: Context,
+        studentId: String,
+        degreeName: String,
+        institutionName: String,
+        issuanceDate: String,
+        certificateHash: String,
+        ocrData: String,
+        processedImageUrl: String
+    ): String {
+        val stub = ctx.stub
+
+        // Validate university registration
+        val universityKey = UNIVERSITY_PREFIX + institutionName
+        val universityBytes = stub.getState(universityKey)
+        if (universityBytes == null || universityBytes.isEmpty()) {
+            throw ChaincodeException("University not registered: $institutionName")
+        }
+
+        val university = objectMapper.readValue(universityBytes, University::class.java)
+        if (!university.isActive) {
+            throw ChaincodeException("University is not active: $institutionName")
+        }
+
+        // Validate input data
+        if (studentId.isBlank() || degreeName.isBlank() || certificateHash.isBlank()) {
+            throw ChaincodeException("Required fields cannot be empty")
+        }
+
+        // Check if hash already exists
+        val hashKey = HASH_PREFIX + certificateHash
+        val existingDegreeId = stub.getState(hashKey)
+        if (existingDegreeId != null && existingDegreeId.isNotEmpty()) {
+            throw ChaincodeException("Certificate hash already exists: $certificateHash")
+        }
+
+        // Create degree with hash
+        val degreeId = UUID.randomUUID().toString()
+        val degree = DegreeWithHash(
+            degreeId = degreeId,
+            studentId = studentId,
+            degreeName = degreeName,
+            institutionName = institutionName,
+            issuanceDate = LocalDateTime.parse(issuanceDate, dateFormatter),
+            certificateHash = certificateHash,
+            ocrData = ocrData,
+            processedImageUrl = processedImageUrl,
+            submissionDate = LocalDateTime.now(),
+            status = DegreeStatus.ACTIVE,
+            verificationCount = 0
+        )
+
+        // Store degree record
+        val degreeKey = DEGREE_PREFIX + degreeId
+        stub.putState(degreeKey, objectMapper.writeValueAsBytes(degree))
+
+        // Store hash mapping for quick lookup
+        stub.putState(hashKey, degreeId.toByteArray())
+
+        // Update university statistics
+        val updatedUniversity = university.copy(
+            submissionCount = university.submissionCount + 1
+        )
+        stub.putState(universityKey, objectMapper.writeValueAsBytes(updatedUniversity))
+
+        // Log transaction
+        ctx.stub.setEvent("DegreeSubmittedWithHash", objectMapper.writeValueAsBytes(
+            mapOf(
+                "degreeId" to degreeId,
+                "certificateHash" to certificateHash,
+                "institutionName" to institutionName,
+                "studentId" to studentId,
+                "timestamp" to LocalDateTime.now().toString()
+            )
+        ))
+
+        return degreeId
+    }
+
+    @Transaction(intent = Transaction.TYPE.EVALUATE)
+    fun verifyDegreeByHash(
+        ctx: Context,
+        extractedHash: String,
+        ocrData: String? = null
+    ): String {
+        val stub = ctx.stub
+
+        // Look up degree by hash
+        val hashKey = HASH_PREFIX + extractedHash
+        val degreeIdBytes = stub.getState(hashKey)
+
+        if (degreeIdBytes == null || degreeIdBytes.isEmpty()) {
+            return objectMapper.writeValueAsString(
+                VerificationResultWithConfidence(
+                    verified = false,
+                    degreeId = null,
+                    verificationMethod = "HASH_LOOKUP",
+                    confidence = 0.0,
+                    message = "Hash not found in blockchain",
+                    timestamp = LocalDateTime.now()
+                )
+            )
+        }
+
+        val degreeId = String(degreeIdBytes)
+        val degreeKey = DEGREE_PREFIX + degreeId
+        val degreeBytes = stub.getState(degreeKey)
+
+        if (degreeBytes == null || degreeBytes.isEmpty()) {
+            return objectMapper.writeValueAsString(
+                VerificationResultWithConfidence(
+                    verified = false,
+                    degreeId = degreeId,
+                    verificationMethod = "HASH_LOOKUP",
+                    confidence = 0.0,
+                    message = "Degree record not found",
+                    timestamp = LocalDateTime.now()
+                )
+            )
+        }
+
+        val degree = objectMapper.readValue(degreeBytes, DegreeWithHash::class.java)
+
+        // If degree is revoked, return verification failure
+        if (degree.status == DegreeStatus.REVOKED) {
+            return objectMapper.writeValueAsString(
+                VerificationResultWithConfidence(
+                    verified = false,
+                    degreeId = degreeId,
+                    verificationMethod = "HASH_LOOKUP",
+                    confidence = 0.0,
+                    message = "Degree has been revoked",
+                    timestamp = LocalDateTime.now()
+                )
+            )
+        }
+
+        // Calculate confidence based on OCR data match (if provided)
+        var confidence = 1.0
+        var verificationMethod = "HASH_MATCH"
+
+        if (!ocrData.isNullOrBlank()) {
+            confidence = calculateOcrMatchConfidence(degree.ocrData, ocrData)
+            verificationMethod = "HASH_AND_OCR_MATCH"
+        }
+
+        // Update verification count
+        val updatedDegree = degree.copy(
+            verificationCount = degree.verificationCount + 1,
+            lastVerified = LocalDateTime.now()
+        )
+        stub.putState(degreeKey, objectMapper.writeValueAsBytes(updatedDegree))
+
+        // Update university verification count
+        val universityKey = UNIVERSITY_PREFIX + degree.institutionName
+        val universityBytes = stub.getState(universityKey)
+        if (universityBytes != null && universityBytes.isNotEmpty()) {
+            val university = objectMapper.readValue(universityBytes, University::class.java)
+            val updatedUniversity = university.copy(
+                verificationCount = university.verificationCount + 1
+            )
+            stub.putState(universityKey, objectMapper.writeValueAsBytes(updatedUniversity))
+        }
+
+        // Log verification
+        val verificationId = UUID.randomUUID().toString()
+        val verification = VerificationLogEntry(
+            verificationId = verificationId,
+            degreeId = degreeId,
+            verifierOrg = ctx.clientIdentity.mspId,
+            verificationMethod = verificationMethod,
+            confidence = confidence,
+            timestamp = LocalDateTime.now(),
+            extractedHash = extractedHash
+        )
+
+        val verificationKey = VERIFICATION_PREFIX + verificationId
+        stub.putState(verificationKey, objectMapper.writeValueAsBytes(verification))
+
+        // Set event for successful verification
+        ctx.stub.setEvent("DegreeVerified", objectMapper.writeValueAsBytes(
+            mapOf(
+                "degreeId" to degreeId,
+                "verificationMethod" to verificationMethod,
+                "confidence" to confidence,
+                "timestamp" to LocalDateTime.now().toString()
+            )
+        ))
+
+        return objectMapper.writeValueAsString(
+            VerificationResultWithConfidence(
+                verified = confidence >= 0.8,
+                degreeId = degreeId,
+                degree = updatedDegree,
+                verificationMethod = verificationMethod,
+                confidence = confidence,
+                message = if (confidence >= 0.8) "Degree verified successfully" else "Low confidence verification",
+                timestamp = LocalDateTime.now()
+            )
         )
     }
 
-    // ==================== UNIVERSITY MANAGEMENT ====================
+    @Transaction(intent = Transaction.TYPE.EVALUATE)
+    fun getDegreeByHash(
+        ctx: Context,
+        certificateHash: String
+    ): String {
+        val stub = ctx.stub
+
+        val hashKey = HASH_PREFIX + certificateHash
+        val degreeIdBytes = stub.getState(hashKey)
+
+        if (degreeIdBytes == null || degreeIdBytes.isEmpty()) {
+            throw ChaincodeException("Degree not found for hash: $certificateHash")
+        }
+
+        val degreeId = String(degreeIdBytes)
+        val degreeKey = DEGREE_PREFIX + degreeId
+        val degreeBytes = stub.getState(degreeKey)
+
+        if (degreeBytes == null || degreeBytes.isEmpty()) {
+            throw ChaincodeException("Degree record not found: $degreeId")
+        }
+
+        return String(degreeBytes)
+    }
+
+    @Transaction(intent = Transaction.TYPE.EVALUATE)
+    fun getVerificationHistory(
+        ctx: Context,
+        degreeId: String
+    ): String {
+        val stub = ctx.stub
+        val verifications = mutableListOf<VerificationLogEntry>()
+
+        val iterator = stub.getStateByPartialCompositeKey(VERIFICATION_PREFIX)
+        while (iterator.hasNext()) {
+            val result = iterator.next()
+            val verification = objectMapper.readValue(result.value, VerificationLogEntry::class.java)
+            if (verification.degreeId == degreeId) {
+                verifications.add(verification)
+            }
+        }
+        iterator.close()
+
+        return objectMapper.writeValueAsString(verifications.sortedByDescending { it.timestamp })
+    }
 
     @Transaction(intent = Transaction.TYPE.SUBMIT)
-    fun enrollUniversity(
+    fun revokeDegree(
+        ctx: Context,
+        degreeId: String,
+        reason: String
+    ): String {
+        val stub = ctx.stub
+
+        // Only attestation authority can revoke degrees
+        if (ctx.clientIdentity.mspId != "AttestationMSP") {
+            throw ChaincodeException("Only attestation authority can revoke degrees")
+        }
+
+        val degreeKey = DEGREE_PREFIX + degreeId
+        val degreeBytes = stub.getState(degreeKey)
+
+        if (degreeBytes == null || degreeBytes.isEmpty()) {
+            throw ChaincodeException("Degree not found: $degreeId")
+        }
+
+        val degree = objectMapper.readValue(degreeBytes, DegreeWithHash::class.java)
+        val revokedDegree = degree.copy(
+            status = DegreeStatus.REVOKED,
+            lastVerified = LocalDateTime.now()
+        )
+
+        stub.putState(degreeKey, objectMapper.writeValueAsBytes(revokedDegree))
+
+        // Log revocation
+        ctx.stub.setEvent("DegreeRevoked", objectMapper.writeValueAsBytes(
+            mapOf(
+                "degreeId" to degreeId,
+                "reason" to reason,
+                "timestamp" to LocalDateTime.now().toString()
+            )
+        ))
+
+        return "Degree revoked successfully"
+    }
+
+    // ========== HELPER FUNCTIONS ==========
+
+    private fun calculateOcrMatchConfidence(storedOcrData: String, extractedOcrData: String): Double {
+        return try {
+            val storedData = objectMapper.readValue(storedOcrData, Map::class.java)
+            val extractedData = objectMapper.readValue(extractedOcrData, Map::class.java)
+
+            val keyFields = listOf("studentName", "degreeName", "institutionName", "issuanceDate", "certificateNumber")
+            var matchCount = 0
+            var totalFields = 0
+
+            for (field in keyFields) {
+                if (storedData.containsKey(field) && extractedData.containsKey(field)) {
+                    totalFields++
+                    val storedValue = storedData[field]?.toString()?.trim()?.lowercase()
+                    val extractedValue = extractedData[field]?.toString()?.trim()?.lowercase()
+
+                    if (storedValue == extractedValue) {
+                        matchCount++
+                    } else {
+                        // Check for partial matches (useful for name variations)
+                        val similarity = calculateStringSimilarity(storedValue ?: "", extractedValue ?: "")
+                        if (similarity > 0.8) {
+                            matchCount += similarity
+                        }
+                    }
+                }
+            }
+
+            return if (totalFields > 0) matchCount / totalFields else 0.0
+        } catch (e: Exception) {
+            return 0.5 // Default confidence if OCR comparison fails
+        }
+    }
+
+    private fun calculateStringSimilarity(str1: String, str2: String): Double {
+        val longer = if (str1.length > str2.length) str1 else str2
+        val shorter = if (str1.length > str2.length) str2 else str1
+
+        if (longer.isEmpty()) return 1.0
+
+        return (longer.length - editDistance(longer, shorter)) / longer.length.toDouble()
+    }
+
+    private fun editDistance(str1: String, str2: String): Int {
+        val dp = Array(str1.length + 1) { IntArray(str2.length + 1) }
+
+        for (i in 0..str1.length) dp[i][0] = i
+        for (j in 0..str2.length) dp[0][j] = j
+
+        for (i in 1..str1.length) {
+            for (j in 1..str2.length) {
+                dp[i][j] = if (str1[i - 1] == str2[j - 1]) {
+                    dp[i - 1][j - 1]
+                } else {
+                    1 + minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+                }
+            }
+        }
+
+        return dp[str1.length][str2.length]
+    }
+
+    // ========== EXISTING UNIVERSITY MANAGEMENT FUNCTIONS ==========
+
+    @Transaction(intent = Transaction.TYPE.SUBMIT)
+    fun registerUniversity(
         ctx: Context,
         universityCode: String,
         universityName: String,
         country: String,
-        address: String,
         contactEmail: String,
         publicKey: String,
-        stakeAmount: Double
+        initialStake: Double
     ): String {
         val stub = ctx.stub
 
-        // Validate input
-        ValidationUtils.validateUniversityCode(universityCode)
-        ValidationUtils.validateStakeAmount(stakeAmount)
-        ValidationUtils.validateEmail(contactEmail)
-
-        // Check if university already exists
-        val existingUniversity = getUniversityByCode(ctx, universityCode)
-        if (existingUniversity != null) {
-            throw ChaincodeException("University already enrolled", "UNIVERSITY_EXISTS")
+        // Only attestation authority can register universities
+        if (ctx.clientIdentity.mspId != "AttestationMSP") {
+            throw ChaincodeException("Only attestation authority can register universities")
         }
 
-        // Create university record
+        if (initialStake < MINIMUM_STAKE) {
+            throw ChaincodeException("Initial stake must be at least $MINIMUM_STAKE")
+        }
+
         val university = University(
             universityCode = universityCode,
             universityName = universityName,
             country = country,
-            address = address,
             contactEmail = contactEmail,
             publicKey = publicKey,
-            stakeAmount = stakeAmount,
-            status = "PENDING_APPROVAL",
-            joinedAt = getCurrentTimestamp(),
-            lastActive = getCurrentTimestamp()
+            registrationDate = LocalDateTime.now(),
+            isActive = true,
+            stake = initialStake,
+            totalEarnings = 0.0,
+            verificationCount = 0,
+            submissionCount = 0
         )
 
-        // Store university
-        stub.putState(
-            UNIVERSITY_PREFIX + universityCode,
-            objectMapper.writeValueAsBytes(university)
-        )
+        val key = UNIVERSITY_PREFIX + universityCode
+        stub.putState(key, objectMapper.writeValueAsBytes(university))
 
-        // Create stake payment record
-        val stakePayment = Payment(
-            paymentId = UUID.randomUUID().toString(),
-            fromOrganization = universityCode,
-            toOrganization = ATTESTATION_ORG,
-            amount = stakeAmount,
-            currency = "USD",
-            paymentType = "STAKE",
-            status = "PENDING",
-            transactionHash = null,
-            relatedEntityId = universityCode,
-            timestamp = getCurrentTimestamp()
-        )
+        ctx.stub.setEvent("UniversityRegistered", objectMapper.writeValueAsBytes(
+            mapOf(
+                "universityCode" to universityCode,
+                "universityName" to universityName,
+                "timestamp" to LocalDateTime.now().toString()
+            )
+        ))
 
-        stub.putState(
-            PAYMENT_PREFIX + stakePayment.paymentId,
-            objectMapper.writeValueAsBytes(stakePayment)
-        )
-
-        return "University enrollment initiated. Pending approval and stake payment."
-    }
-
-    @Transaction(intent = Transaction.TYPE.SUBMIT)
-    fun approveUniversity(ctx: Context, universityCode: String): String {
-        requireAttestationAuthority(ctx)
-
-        val university = getUniversityByCode(ctx, universityCode)
-            ?: throw ChaincodeException("University not found", "UNIVERSITY_NOT_FOUND")
-
-        if (university.status != "PENDING_APPROVAL") {
-            throw ChaincodeException("University not in pending status", "INVALID_STATUS")
-        }
-
-        val approvedUniversity = university.copy(
-            status = "ACTIVE",
-            lastActive = getCurrentTimestamp(),
-            version = university.version + 1
-        )
-
-        ctx.stub.putState(
-            UNIVERSITY_PREFIX + universityCode,
-            objectMapper.writeValueAsBytes(approvedUniversity)
-        )
-
-        return "University approved and activated"
-    }
-
-    @Transaction(intent = Transaction.TYPE.SUBMIT)
-    fun blacklistUniversity(ctx: Context, universityCode: String, reason: String): String {
-        requireAttestationAuthority(ctx)
-
-        val university = getUniversityByCode(ctx, universityCode)
-            ?: throw ChaincodeException("University not found", "UNIVERSITY_NOT_FOUND")
-
-        val blacklistedUniversity = university.copy(
-            status = "BLACKLISTED",
-            lastActive = getCurrentTimestamp(),
-            version = university.version + 1,
-            accreditation = university.accreditation + ("blacklistReason" to reason)
-        )
-
-        ctx.stub.putState(
-            UNIVERSITY_PREFIX + universityCode,
-            objectMapper.writeValueAsBytes(blacklistedUniversity)
-        )
-
-        // Confiscate stake
-        confiscateStake(ctx, universityCode)
-
-        return "University blacklisted and stake confiscated"
-    }
-
-    // ==================== DEGREE MANAGEMENT ====================
-
-    @Transaction(intent = Transaction.TYPE.SUBMIT)
-    fun submitDegree(
-        ctx: Context,
-        certificateNumber: String,
-        studentName: String,
-        degreeName: String,
-        facultyName: String,
-        degreeClassification: String,
-        issuanceDate: String,
-        expiryDate: String?,
-        certificateHash: String
-    ): String {
-        val stub = ctx.stub
-        val universityCode = getInvokerOrganization(ctx)
-
-        // Validate university
-        val university = getUniversityByCode(ctx, universityCode)
-            ?: throw ChaincodeException("University not registered", "UNIVERSITY_NOT_REGISTERED")
-
-        if (university.status != "ACTIVE") {
-            throw ChaincodeException("University not active", "UNIVERSITY_NOT_ACTIVE")
-        }
-
-        // Validate input
-        ValidationUtils.validateCertificateNumber(certificateNumber)
-        ValidationUtils.validateHash(certificateHash)
-
-        // Check if degree already exists
-        val existingDegree = getDegreeByNumber(ctx, certificateNumber)
-        if (existingDegree != null) {
-            throw ChaincodeException("Degree already exists", "DEGREE_EXISTS")
-        }
-
-        // Create degree record
-        val degree = Degree(
-            certificateNumber = certificateNumber,
-            universityCode = universityCode,
-            studentName = studentName,
-            degreeName = degreeName,
-            facultyName = facultyName,
-            degreeClassification = degreeClassification,
-            issuanceDate = issuanceDate,
-            expiryDate = expiryDate,
-            certificateHash = certificateHash,
-            status = "ACTIVE",
-            createdAt = getCurrentTimestamp(),
-            updatedAt = getCurrentTimestamp()
-        )
-
-        // Store degree
-        stub.putState(
-            DEGREE_PREFIX + certificateNumber,
-            objectMapper.writeValueAsBytes(degree)
-        )
-
-        // Update university statistics
-        val updatedUniversity = university.copy(
-            totalDegreesIssued = university.totalDegreesIssued + 1,
-            lastActive = getCurrentTimestamp(),
-            version = university.version + 1
-        )
-
-        stub.putState(
-            UNIVERSITY_PREFIX + universityCode,
-            objectMapper.writeValueAsBytes(updatedUniversity)
-        )
-
-        return "Degree submitted successfully"
-    }
-
-    @Transaction(intent = Transaction.TYPE.EVALUATE)
-    fun verifyDegree(
-        ctx: Context,
-        certificateNumber: String,
-        verifierOrganization: String,
-        verifierEmail: String,
-        providedHash: String?
-    ): String {
-        val degree = getDegreeByNumber(ctx, certificateNumber)
-            ?: throw ChaincodeException("Degree not found", "DEGREE_NOT_FOUND")
-
-        val university = getUniversityByCode(ctx, degree.universityCode)
-            ?: throw ChaincodeException("Issuing university not found", "UNIVERSITY_NOT_FOUND")
-
-        if (university.status == "BLACKLISTED") {
-            throw ChaincodeException("Issuing university is blacklisted", "UNIVERSITY_BLACKLISTED")
-        }
-
-        if (degree.status != "ACTIVE") {
-            throw ChaincodeException("Degree is not active", "DEGREE_NOT_ACTIVE")
-        }
-
-        // Check expiry
-        if (degree.expiryDate != null && isExpired(degree.expiryDate)) {
-            throw ChaincodeException("Degree has expired", "DEGREE_EXPIRED")
-        }
-
-        var verificationResult = "VERIFIED"
-        var confidence = 1.0
-        var extractionMethod = "HASH"
-
-        // Verify hash if provided
-        if (providedHash != null) {
-            if (degree.certificateHash != providedHash.lowercase()) {
-                verificationResult = "FAILED"
-                confidence = 0.0
-            }
-        }
-
-        val verificationResponse = mapOf(
-            "certificateNumber" to degree.certificateNumber,
-            "studentName" to degree.studentName,
-            "degreeName" to degree.degreeName,
-            "facultyName" to degree.facultyName,
-            "degreeClassification" to degree.degreeClassification,
-            "issuanceDate" to degree.issuanceDate,
-            "universityName" to university.universityName,
-            "universityCode" to university.universityCode,
-            "verificationResult" to verificationResult,
-            "confidence" to confidence,
-            "extractionMethod" to extractionMethod,
-            "verificationTimestamp" to getCurrentTimestamp()
-        )
-
-        return objectMapper.writeValueAsString(verificationResponse)
-    }
-
-    @Transaction(intent = Transaction.TYPE.SUBMIT)
-    fun processVerificationPayment(
-        ctx: Context,
-        certificateNumber: String,
-        verifierOrganization: String,
-        verifierEmail: String,
-        paymentAmount: Double
-    ): String {
-        val degree = getDegreeByNumber(ctx, certificateNumber)
-            ?: throw ChaincodeException("Degree not found", "DEGREE_NOT_FOUND")
-
-        val university = getUniversityByCode(ctx, degree.universityCode)
-            ?: throw ChaincodeException("University not found", "UNIVERSITY_NOT_FOUND")
-
-        if (paymentAmount < VERIFICATION_FEE) {
-            throw ChaincodeException("Insufficient payment amount", "INSUFFICIENT_PAYMENT")
-        }
-
-        val verificationId = UUID.randomUUID().toString()
-        val paymentId = UUID.randomUUID().toString()
-
-        // Create verification record
-        val verification = Verification(
-            verificationId = verificationId,
-            certificateNumber = certificateNumber,
-            verifierOrganization = verifierOrganization,
-            verifierEmail = verifierEmail,
-            verificationTimestamp = getCurrentTimestamp(),
-            verificationResult = "VERIFIED",
-            confidence = 1.0,
-            paymentId = paymentId,
-            verificationFee = paymentAmount,
-            extractionMethod = "BLOCKCHAIN"
-        )
-
-        ctx.stub.putState(
-            VERIFICATION_PREFIX + verificationId,
-            objectMapper.writeValueAsBytes(verification)
-        )
-
-        // Process revenue sharing (50% to university, 50% to attestation authority)
-        val universityShare = paymentAmount * 0.5
-        val authorityShare = paymentAmount * 0.5
-
-        // Create payment records
-        createPaymentRecord(ctx, paymentId, verifierOrganization, degree.universityCode,
-            universityShare, "VERIFICATION_FEE", certificateNumber)
-
-        createPaymentRecord(ctx, UUID.randomUUID().toString(), verifierOrganization,
-            ATTESTATION_ORG, authorityShare, "VERIFICATION_FEE", certificateNumber)
-
-        // Update university revenue
-        val updatedUniversity = university.copy(
-            revenue = university.revenue + universityShare,
-            lastActive = getCurrentTimestamp(),
-            version = university.version + 1
-        )
-
-        ctx.stub.putState(
-            UNIVERSITY_PREFIX + degree.universityCode,
-            objectMapper.writeValueAsBytes(updatedUniversity)
-        )
-
-        return "Verification payment processed successfully"
-    }
-
-    // ==================== QUERY FUNCTIONS ====================
-
-    @Transaction(intent = Transaction.TYPE.EVALUATE)
-    fun getUniversity(ctx: Context, universityCode: String): String {
-        val university = getUniversityByCode(ctx, universityCode)
-            ?: throw ChaincodeException("University not found", "UNIVERSITY_NOT_FOUND")
-
-        return objectMapper.writeValueAsString(university)
-    }
-
-    @Transaction(intent = Transaction.TYPE.EVALUATE)
-    fun getDegree(ctx: Context, certificateNumber: String): String {
-        val degree = getDegreeByNumber(ctx, certificateNumber)
-            ?: throw ChaincodeException("Degree not found", "DEGREE_NOT_FOUND")
-
-        return objectMapper.writeValueAsString(degree)
+        return "University registered successfully"
     }
 
     @Transaction(intent = Transaction.TYPE.EVALUATE)
     fun getAllUniversities(ctx: Context): String {
-        val queryString = """{"selector":{"universityCode":{"${"$"}regex":".*"}}}"""
-        val results = queryBySelector(ctx, queryString)
-        return objectMapper.writeValueAsString(results)
+        val stub = ctx.stub
+        val universities = mutableListOf<University>()
+
+        val iterator = stub.getStateByPartialCompositeKey(UNIVERSITY_PREFIX)
+        while (iterator.hasNext()) {
+            val result = iterator.next()
+            val university = objectMapper.readValue(result.value, University::class.java)
+            universities.add(university)
+        }
+        iterator.close()
+
+        return objectMapper.writeValueAsString(universities)
     }
 
     @Transaction(intent = Transaction.TYPE.EVALUATE)
-    fun getUniversityStatistics(ctx: Context, universityCode: String): String {
-        val university = getUniversityByCode(ctx, universityCode)
-            ?: throw ChaincodeException("University not found", "UNIVERSITY_NOT_FOUND")
+    fun getUniversity(ctx: Context, universityCode: String): String {
+        val stub = ctx.stub
+        val key = UNIVERSITY_PREFIX + universityCode
+        val universityBytes = stub.getState(key)
 
-        val stats = mapOf(
-            "universityCode" to university.universityCode,
-            "universityName" to university.universityName,
-            "status" to university.status,
-            "totalDegreesIssued" to university.totalDegreesIssued,
-            "revenue" to university.revenue,
-            "stakeAmount" to university.stakeAmount,
-            "joinedAt" to university.joinedAt,
-            "lastActive" to university.lastActive
-        )
-
-        return objectMapper.writeValueAsString(stats)
-    }
-
-    // ==================== UTILITY FUNCTIONS ====================
-
-    private fun getUniversityByCode(ctx: Context, universityCode: String): University? {
-        val universityBytes = ctx.stub.getState(UNIVERSITY_PREFIX + universityCode)
-        return if (universityBytes != null && universityBytes.isNotEmpty()) {
-            objectMapper.readValue(universityBytes, University::class.java)
-        } else null
-    }
-
-    private fun getDegreeByNumber(ctx: Context, certificateNumber: String): Degree? {
-        val degreeBytes = ctx.stub.getState(DEGREE_PREFIX + certificateNumber)
-        return if (degreeBytes != null && degreeBytes.isNotEmpty()) {
-            objectMapper.readValue(degreeBytes, Degree::class.java)
-        } else null
-    }
-
-    private fun createPaymentRecord(
-        ctx: Context,
-        paymentId: String,
-        fromOrg: String,
-        toOrg: String,
-        amount: Double,
-        paymentType: String,
-        relatedEntityId: String
-    ) {
-        val payment = Payment(
-            paymentId = paymentId,
-            fromOrganization = fromOrg,
-            toOrganization = toOrg,
-            amount = amount,
-            currency = "USD",
-            paymentType = paymentType,
-            status = "COMPLETED",
-            transactionHash = null,
-            relatedEntityId = relatedEntityId,
-            timestamp = getCurrentTimestamp()
-        )
-
-        ctx.stub.putState(
-            PAYMENT_PREFIX + paymentId,
-            objectMapper.writeValueAsBytes(payment)
-        )
-    }
-
-    private fun confiscateStake(ctx: Context, universityCode: String) {
-        val confiscationId = UUID.randomUUID().toString()
-        val payment = Payment(
-            paymentId = confiscationId,
-            fromOrganization = universityCode,
-            toOrganization = ATTESTATION_ORG,
-            amount = 0.0, // Will be updated with actual stake amount
-            currency = "USD",
-            paymentType = "STAKE_CONFISCATION",
-            status = "COMPLETED",
-            transactionHash = null,
-            relatedEntityId = universityCode,
-            timestamp = getCurrentTimestamp()
-        )
-
-        ctx.stub.putState(
-            PAYMENT_PREFIX + confiscationId,
-            objectMapper.writeValueAsBytes(payment)
-        )
-    }
-
-    private fun queryBySelector(ctx: Context, queryString: String): List<Map<String, Any>> {
-        val resultsIterator = ctx.stub.getQueryResult(queryString)
-        val results = mutableListOf<Map<String, Any>>()
-
-        while (resultsIterator.hasNext()) {
-            val queryResult = resultsIterator.next()
-            val record = objectMapper.readValue(queryResult.stringValue, Map::class.java)
-            results.add(record as Map<String, Any>)
+        if (universityBytes == null || universityBytes.isEmpty()) {
+            throw ChaincodeException("University not found: $universityCode")
         }
 
-        resultsIterator.close()
-        return results
-    }
-
-    private fun requireAttestationAuthority(ctx: Context) {
-        val invokerOrg = getInvokerOrganization(ctx)
-        if (invokerOrg != ATTESTATION_ORG) {
-            throw ChaincodeException("Operation requires attestation authority", "UNAUTHORIZED")
-        }
-    }
-
-    private fun getInvokerOrganization(ctx: Context): String {
-        // In a real implementation, this would extract the organization from the client identity
-        // For now, we'll use a placeholder
-        return ctx.clientIdentity.mspId
-    }
-
-    private fun getCurrentTimestamp(): String {
-        return LocalDateTime.now().format(dateFormatter)
-    }
-
-    private fun isExpired(expiryDate: String): Boolean {
-        val expiry = LocalDateTime.parse(expiryDate, dateFormatter)
-        return LocalDateTime.now().isAfter(expiry)
+        return String(universityBytes)
     }
 }

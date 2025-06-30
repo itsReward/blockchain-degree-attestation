@@ -14,6 +14,7 @@ allprojects {
         mavenCentral()
         maven { url = uri("https://hyperledger.jfrog.io/artifactory/besu-maven/") }
         maven { url = uri("https://packages.confluent.io/maven/") }
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
