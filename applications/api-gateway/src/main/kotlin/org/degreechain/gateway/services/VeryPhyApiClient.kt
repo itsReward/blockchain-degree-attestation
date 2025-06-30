@@ -327,6 +327,64 @@ class VeryPhyApiClient(
 
         throw VeryPhyApiException("VeryPhy API call failed after ${config.maxRetries} attempts", lastException)
     }
+
+    // Add these methods to your VeryPhyApiClient.kt file
+
+    /**
+     * Extract certificate data for verification purposes
+     */
+    fun extractCertificateData(file: MultipartFile): VerificationExtractionResponse {
+        logger.info("Extracting certificate data for verification: ${file.originalFilename}")
+
+        validateFile(file)
+
+        // Create temporary file
+        val tempFile = Files.createTempFile("extract_", "_${file.originalFilename}")
+        try {
+            Files.copy(file.inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING)
+
+            // Prepare request
+            val headers = createHeaders()
+            val body = createMultipartBody(tempFile, mapOf(
+                "extract_only" to "true",
+                "include_hash" to "true"
+            ))
+
+            val requestEntity = HttpEntity(body, headers)
+
+            // Make API call with retry logic
+            val response = executeWithRetry {
+                restTemplate.exchange(
+                    "${config.baseUrl}/api/v1/certificates/extract",
+                    HttpMethod.POST,
+                    requestEntity,
+                    VerificationExtractionResponse::class.java
+                )
+            }
+
+            if (response.statusCode == HttpStatus.OK && response.body != null) {
+                logger.info("Certificate data extracted successfully")
+                return response.body!!
+            } else {
+                throw RuntimeException("Failed to extract certificate data: ${response.statusCode}")
+            }
+
+        } catch (e: HttpClientErrorException) {
+            logger.error("Client error during certificate extraction", e)
+            throw RuntimeException("VeryPhy API client error: ${e.responseBodyAsString}", e)
+        } catch (e: HttpServerErrorException) {
+            logger.error("Server error during certificate extraction", e)
+            throw RuntimeException("VeryPhy API server error: ${e.responseBodyAsString}", e)
+        } catch (e: Exception) {
+            logger.error("Unexpected error during certificate extraction", e)
+            throw RuntimeException("Certificate extraction failed: ${e.message}", e)
+        } finally {
+            Files.deleteIfExists(tempFile)
+        }
+    }
+
+
+
 }
 
 

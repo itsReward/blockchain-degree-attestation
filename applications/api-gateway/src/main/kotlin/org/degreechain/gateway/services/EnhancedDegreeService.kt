@@ -2,7 +2,7 @@ package org.degreechain.gateway.services
 
 import org.degreechain.gateway.models.*
 import org.degreechain.gateway.config.IntegrationConfig
-import org.degreechain.blockchain.FabricGatewayClient  // Fixed import
+import org.degreechain.blockchain.FabricGatewayClient
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
 import org.slf4j.LoggerFactory
@@ -11,7 +11,7 @@ import java.util.*
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue  // Fixed import for ObjectMapper readValue
+import com.fasterxml.jackson.module.kotlin.readValue
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.withPermit
 @Service
 class EnhancedDegreeService(
     private val veryphyClient: VeryPhyApiClient,
-    private val blockchainClient: FabricGatewayClient,  // Fixed parameter name
+    private val blockchainClient: FabricGatewayClient,
     private val config: IntegrationConfig,
     private val objectMapper: ObjectMapper
 ) {
@@ -55,16 +55,18 @@ class EnhancedDegreeService(
 
             updateProcessingStatus(operationId, ProcessingState.IN_PROGRESS, "Submitting to blockchain")
 
-            // Submit to blockchain
+            // Submit to blockchain - Fixed parameter names and extraction
             val blockchainResult = blockchainClient.submitTransaction(
-                "submitDegreeWithHash",
-                request.studentId,
-                request.degreeName,
-                request.institutionName,
-                request.issuanceDate,
-                processedCertificate.hash,
-                processedCertificate.ocrData ?: "{}",
-                processedCertificate.processedImageUrl ?: ""
+                functionName = "submitDegreeWithHash",
+                args = arrayOf(
+                    request.studentId,
+                    request.degreeName,
+                    request.institutionName,
+                    request.issuanceDate,
+                    processedCertificate.hash,
+                    objectMapper.writeValueAsString(processedCertificate.certificateData ?: mapOf<String, Any>()),
+                    processedCertificate.processedImageUrl ?: ""
+                )
             )
 
             val processingTime = System.currentTimeMillis() - startTime
@@ -76,11 +78,11 @@ class EnhancedDegreeService(
                 degreeId = blockchainResult.result,
                 certificateHash = processedCertificate.hash,
                 processedImageUrl = processedCertificate.processedImageUrl,
-                ocrData = processedCertificate.ocrData,
+                ocrData = objectMapper.writeValueAsString(processedCertificate.certificateData ?: mapOf<String, Any>()),
                 blockchainTransactionId = blockchainResult.transactionId,
                 processingTime = processingTime,
                 message = if (blockchainResult.success) "Degree submitted successfully" else "Submission failed",
-                verifyPhyProcessingId = processedCertificate.processingId
+                verifyPhyProcessingId = processedCertificate.certificateNumber
             )
 
         } catch (e: Exception) {
@@ -119,12 +121,18 @@ class EnhancedDegreeService(
 
             // Step 1: Extract hash and OCR data from certificate
             val extractionResult = veryphyClient.extractCertificateData(certificateFile)
-            val extractedHash = extractionResult.extractedHash
-            val ocrData = extractionResult.certificateData
+            val extractedHash = extractionResult.hash
+            val certificateData = extractionResult.certificateData
 
             // Step 2: Verify on blockchain using extracted hash
             val blockchainResult = if (extractedHash != null) {
-                blockchainClient.evaluateTransaction("verifyDegreeByHash", extractedHash, ocrData?.toString() ?: "{}")
+                blockchainClient.evaluateTransaction(
+                    functionName = "verifyDegreeByHash",
+                    args = arrayOf(
+                        extractedHash,
+                        objectMapper.writeValueAsString(certificateData ?: mapOf<String, Any>())
+                    )
+                )
             } else {
                 null
             }
@@ -161,9 +169,12 @@ class EnhancedDegreeService(
                     try {
                         val result: Map<String, Any> = objectMapper.readValue(it)
                         result["degreeId"] as? String
-                    } catch (e: Exception) { null }
+                    } catch (e: Exception) {
+                        logger.warn("Failed to extract degreeId from blockchain result", e)
+                        null
+                    }
                 },
-                certificateData = ocrData,
+                certificateData = certificateData,
                 blockchainRecord = blockchainResult?.data,
                 extractedHash = extractedHash,
                 expectedHash = expectedHash,
@@ -175,8 +186,8 @@ class EnhancedDegreeService(
             )
 
         } catch (e: Exception) {
-            logger.error("Error in dual verification", e)
             val processingTime = System.currentTimeMillis() - startTime
+            logger.error("Error in dual verification", e)
 
             EnhancedVerificationResult(
                 verified = false,
@@ -197,87 +208,26 @@ class EnhancedDegreeService(
     }
 
     /**
-     * Batch verify multiple certificates
+     * Alternative method name for compatibility
      */
-    suspend fun batchVerifyCertificates(
-        files: List<MultipartFile>,
-        expectedHashes: List<String>?,
-        verifierOrganization: String
-    ): BatchVerificationResult = withContext(Dispatchers.IO) {
-        val batchId = UUID.randomUUID().toString()
-        val startTime = System.currentTimeMillis()
-
-        logger.info("Starting batch verification. Batch ID: $batchId, Files: ${files.size}")
-
-        try {
-            // Process files in parallel with semaphore to limit concurrency
-            val results = files.mapIndexed { index, file ->
-                async {
-                    semaphore.withPermit {
-                        val expectedHash = expectedHashes?.getOrNull(index)
-                        try {
-                            dualVerifyDegree(file, expectedHash, verifierOrganization)
-                        } catch (e: Exception) {
-                            logger.error("Error verifying file ${index + 1}", e)
-                            EnhancedVerificationResult(
-                                verified = false,
-                                confidence = 0.0,
-                                verificationMethod = "ERROR",
-                                degreeId = null,
-                                certificateData = null,
-                                blockchainRecord = null,
-                                extractedHash = null,
-                                expectedHash = expectedHash,
-                                ocrMatchScore = null,
-                                hashMatchScore = null,
-                                message = "Processing failed: ${e.message}",
-                                processingTime = 0L,
-                                verificationId = UUID.randomUUID().toString()
-                            )
-                        }
-                    }
-                }
-            }.awaitAll()  // Fixed: awaitAll() on List<Deferred>
-
-            val successCount = results.count { it.verified }
-            val failureCount = results.size - successCount
-            val processingTime = System.currentTimeMillis() - startTime
-
-            logger.info("Batch verification completed. Success: $successCount, Failed: $failureCount")
-
-            BatchVerificationResult(
-                batchId = batchId,
-                results = results,
-                totalProcessed = results.size,
-                successCount = successCount,
-                failureCount = failureCount,
-                processingTime = processingTime
-            )
-
-        } catch (e: Exception) {
-            logger.error("Error in batch verification", e)
-            BatchVerificationResult(
-                batchId = batchId,
-                results = emptyList(),
-                totalProcessed = files.size,
-                successCount = 0,
-                failureCount = files.size,
-                processingTime = System.currentTimeMillis() - startTime
-            )
-        }
+    suspend fun verifyDegreeWithDualMethod(
+        certificateFile: MultipartFile,
+        expectedHash: String?
+    ): EnhancedVerificationResult {
+        return dualVerifyDegree(certificateFile, expectedHash, "DEFAULT")
     }
 
     /**
-     * Batch submit multiple degrees
+     * Batch submission of degrees
      */
-    suspend fun batchSubmitDegrees(
+    suspend fun submitDegreesBatch(
         files: List<MultipartFile>,
         requests: List<EnhancedDegreeSubmissionRequest>
     ): BatchSubmissionResult = withContext(Dispatchers.IO) {
         val batchId = UUID.randomUUID().toString()
         val startTime = System.currentTimeMillis()
 
-        logger.info("Starting batch degree submission. Batch ID: $batchId, Files: ${files.size}")
+        logger.info("Starting batch submission. Batch ID: $batchId, Files: ${files.size}")
 
         try {
             val results = files.mapIndexed { index, file ->
@@ -337,59 +287,106 @@ class EnhancedDegreeService(
             )
 
         } catch (e: Exception) {
+            val processingTime = System.currentTimeMillis() - startTime
             logger.error("Error in batch submission", e)
+
             BatchSubmissionResult(
                 batchId = batchId,
                 results = emptyList(),
-                totalProcessed = files.size,
+                totalProcessed = 0,
                 successCount = 0,
                 failureCount = files.size,
-                processingTime = System.currentTimeMillis() - startTime
+                processingTime = processingTime
             )
         }
     }
 
     /**
-     * Get processing status for long-running operations
+     * Batch verification of degrees
+     */
+    suspend fun verifyDegreesBatch(
+        files: List<MultipartFile>,
+        expectedHashes: List<String?> = emptyList()
+    ): BatchVerificationResult = withContext(Dispatchers.IO) {
+        val batchId = UUID.randomUUID().toString()
+        val startTime = System.currentTimeMillis()
+
+        logger.info("Starting batch verification. Batch ID: $batchId, Files: ${files.size}")
+
+        try {
+            val results = files.mapIndexed { index, file ->
+                async {
+                    semaphore.withPermit {
+                        val expectedHash = expectedHashes.getOrNull(index)
+                        try {
+                            dualVerifyDegree(file, expectedHash, "BATCH_VERIFICATION")
+                        } catch (e: Exception) {
+                            logger.error("Error verifying degree ${index + 1}", e)
+                            EnhancedVerificationResult(
+                                verified = false,
+                                confidence = 0.0,
+                                verificationMethod = "ERROR",
+                                degreeId = null,
+                                certificateData = null,
+                                blockchainRecord = null,
+                                extractedHash = null,
+                                expectedHash = expectedHash,
+                                ocrMatchScore = null,
+                                hashMatchScore = null,
+                                message = "Verification failed: ${e.message}",
+                                processingTime = 0L,
+                                verificationId = UUID.randomUUID().toString()
+                            )
+                        }
+                    }
+                }
+            }.awaitAll()
+
+            val successCount = results.count { it.verified }
+            val failureCount = results.size - successCount
+            val processingTime = System.currentTimeMillis() - startTime
+
+            logger.info("Batch verification completed. Verified: $successCount, Failed: $failureCount")
+
+            BatchVerificationResult(
+                batchId = batchId,
+                results = results,
+                totalProcessed = results.size,
+                successCount = successCount,
+                failureCount = failureCount,
+                processingTime = processingTime
+            )
+
+        } catch (e: Exception) {
+            val processingTime = System.currentTimeMillis() - startTime
+            logger.error("Error in batch verification", e)
+
+            BatchVerificationResult(
+                batchId = batchId,
+                results = emptyList(),
+                totalProcessed = 0,
+                successCount = 0,
+                failureCount = files.size,
+                processingTime = processingTime
+            )
+        }
+    }
+
+    /**
+     * Get processing status for an operation
      */
     fun getProcessingStatus(operationId: String): ProcessingStatus? {
         return processingJobs[operationId]
     }
 
     /**
-     * Get system analytics
+     * Update processing status
      */
-    suspend fun getSystemAnalytics(): SystemAnalytics = withContext(Dispatchers.IO) {
-        // This would typically query the blockchain for real analytics
-        // For now, return mock data
-        SystemAnalytics(
-            totalDegrees = 1250L,
-            totalVerifications = 3450L,
-            totalUniversities = 45L,
-            averageVerificationTime = 2.3,
-            successRate = 98.7,
-            topUniversities = listOf(
-                UniversityStats("MIT", 150L, 450L, 99.2, 0.96),
-                UniversityStats("Stanford", 130L, 380L, 98.8, 0.95),
-                UniversityStats("Harvard", 120L, 350L, 99.1, 0.97)
-            ),
-            verificationTrends = listOf(
-                VerificationTrend("2024-06-01", 125L, 0.95, 98.4),
-                VerificationTrend("2024-06-02", 142L, 0.96, 98.9),
-                VerificationTrend("2024-06-03", 138L, 0.94, 97.8)
-            ),
-            confidenceDistribution = mapOf(
-                "High (>90%)" to 78,
-                "Medium (70-90%)" to 18,
-                "Low (<70%)" to 4
-            )
-        )
-    }
-
-    // ========== PRIVATE HELPER METHODS ==========
-
     private fun updateProcessingStatus(operationId: String, state: ProcessingState, message: String) {
-        processingJobs[operationId] = ProcessingStatus(
+        val currentTime = System.currentTimeMillis()
+        val existingStatus = processingJobs[operationId]
+
+        val status = ProcessingStatus(
             operationId = operationId,
             state = state,
             message = message,
@@ -400,26 +397,37 @@ class EnhancedDegreeService(
                 ProcessingState.FAILED -> 0
                 ProcessingState.CANCELLED -> 0
             },
-            startTime = System.currentTimeMillis(),
-            lastUpdated = System.currentTimeMillis()
+            startTime = existingStatus?.startTime ?: currentTime,
+            lastUpdated = currentTime
         )
+
+        processingJobs[operationId] = status
     }
 
+    /**
+     * Calculate overall confidence score
+     */
     private fun calculateOverallConfidence(hashMatchScore: Double?, ocrMatchScore: Double?): Double {
         return when {
-            hashMatchScore != null && ocrMatchScore != null -> (hashMatchScore + ocrMatchScore) / 2.0
+            hashMatchScore != null && ocrMatchScore != null -> {
+                // Both scores available - weighted average (hash has higher weight)
+                (hashMatchScore * 0.7) + (ocrMatchScore * 0.3)
+            }
             hashMatchScore != null -> hashMatchScore
             ocrMatchScore != null -> ocrMatchScore
             else -> 0.0
         }
     }
 
+    /**
+     * Determine verification method based on available scores
+     */
     private fun determineVerificationMethod(hashMatchScore: Double?, ocrMatchScore: Double?): String {
         return when {
-            hashMatchScore != null && ocrMatchScore != null -> "HASH_AND_OCR_MATCH"
-            hashMatchScore != null -> "HASH_MATCH"
-            ocrMatchScore != null -> "OCR_MATCH"
-            else -> "NO_MATCH"
+            hashMatchScore != null && ocrMatchScore != null -> "DUAL_VERIFICATION"
+            hashMatchScore != null -> "HASH_VERIFICATION"
+            ocrMatchScore != null -> "OCR_VERIFICATION"
+            else -> "NO_VERIFICATION"
         }
     }
 }
