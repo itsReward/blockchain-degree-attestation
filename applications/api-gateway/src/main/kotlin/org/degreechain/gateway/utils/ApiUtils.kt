@@ -56,6 +56,27 @@ object ApiUtils {
     }
 
     /**
+     * Create error API response with generic type parameter
+     */
+    fun <T> createErrorResponse(
+        message: String,
+        errorCode: String,
+        status: HttpStatus = HttpStatus.BAD_REQUEST
+    ): ResponseEntity<ApiResponse<T>> {
+        logger.warn("API Error - Code: $errorCode, Message: $message")
+
+        return ResponseEntity.status(status).body(
+            ApiResponse<T>(
+                success = false,
+                data = null,
+                message = message,
+                timestamp = LocalDateTime.now(),
+                error = errorCode
+            )
+        )
+    }
+
+    /**
      * Create validation error response
      */
     fun createValidationErrorResponse(

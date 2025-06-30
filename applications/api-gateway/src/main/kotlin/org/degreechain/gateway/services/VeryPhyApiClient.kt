@@ -11,13 +11,9 @@ import org.springframework.web.client.RestTemplate
 import org.springframework.web.client.HttpClientErrorException
 import org.springframework.web.client.HttpServerErrorException
 import org.springframework.web.multipart.MultipartFile
-import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import org.slf4j.LoggerFactory
-import sun.jvm.hotspot.HelloWorld.e
-import java.time.Duration
-import java.util.concurrent.TimeUnit
 
 @Service
 class VeryPhyApiClient(
@@ -245,91 +241,95 @@ class VeryPhyApiClient(
                 Map::class.java
             )
 
-            VeryPhyApiStatistics(
-                totalProcessed = (stats["total_processed"] as? Number)?.toLong() ?: 0L,
-                totalVerifications = (stats["total_verifications"] as? Number)?.toLong() ?: 0L,
-                averageProcessingTime = (stats["average_processing_time"] as? Number)?.toDouble() ?: 0.0,
-                successRate = (stats["success_rate"] as? Number)?.toDouble() ?: 0.0,
-                uptime = (stats["uptime"] as? Number)?.toLong() ?: 0L
-            )
-        } else {
-            VeryPhyApiStatistics()
-        }
-    } catch (e: Exception) {
-        logger.warn("Failed to fetch VeryPhy API statistics", e)
-        VeryPhyApiStatistics()
-    }
-}
+            if (response.statusCode == HttpStatus.OK && response.body != null) {
+                val stats = response.body as Map<String, Any>  // This was missing - you need to extract the body!
 
-// ========== PRIVATE HELPER METHODS ==========
-
-private fun validateFile(file: MultipartFile) {
-    if (file.isEmpty) {
-        throw IllegalArgumentException("File cannot be empty")
-    }
-
-    if (file.size > config.maxFileSize) {
-        throw IllegalArgumentException("File size exceeds maximum allowed size: ${config.maxFileSize}")
-    }
-
-    val filename = file.originalFilename ?: ""
-    val extension = filename.substringAfterLast('.', "").lowercase()
-    if (!config.allowedFileTypes.contains(extension)) {
-        throw IllegalArgumentException("File type not allowed. Supported types: ${config.allowedFileTypes}")
-    }
-}
-
-private fun createHeaders(): HttpHeaders {
-    return HttpHeaders().apply {
-        contentType = MediaType.MULTIPART_FORM_DATA
-        set("Authorization", "Bearer ${config.apiKey}")
-        set("User-Agent", "DegreeAttestationGateway/1.0")
-    }
-}
-
-private fun createMultipartBody(
-    file: java.nio.file.Path,
-    additionalParams: Map<String, String> = emptyMap()
-): MultiValueMap<String, Any> {
-    val body: MultiValueMap<String, Any> = LinkedMultiValueMap()
-    body.add("file", FileSystemResource(file))
-
-    additionalParams.forEach { (key, value) ->
-        body.add(key, value)
-    }
-
-    return body
-}
-
-private fun <T> executeWithRetry(operation: () -> ResponseEntity<T>): ResponseEntity<T> {
-    var lastException: Exception? = null
-
-    repeat(config.maxRetries) { attempt ->
-        try {
-            return operation()
-        } catch (e: HttpClientErrorException) {
-            // Don't retry on client errors (4xx)
-            throw VeryPhyApiException("Client error: ${e.statusCode} - ${e.responseBodyAsString}", e)
-        } catch (e: HttpServerErrorException) {
-            // Retry on server errors (5xx)
-            lastException = e
-            if (attempt < config.maxRetries - 1) {
-                logger.warn("VeryPhy API call failed (attempt ${attempt + 1}/${config.maxRetries}), retrying...", e)
-                Thread.sleep(config.retryDelay.toMillis())
+                VeryPhyApiStatistics(
+                    totalProcessed = (stats["total_processed"] as? Number)?.toLong() ?: 0L,
+                    totalVerifications = (stats["total_verifications"] as? Number)?.toLong() ?: 0L,
+                    averageProcessingTime = (stats["average_processing_time"] as? Number)?.toDouble() ?: 0.0,
+                    successRate = (stats["success_rate"] as? Number)?.toDouble() ?: 0.0,
+                    uptime = (stats["uptime"] as? Number)?.toLong() ?: 0L
+                )
+            } else {
+                VeryPhyApiStatistics()
             }
         } catch (e: Exception) {
-            // Retry on network errors
-            lastException = e
-            if (attempt < config.maxRetries - 1) {
-                logger.warn("VeryPhy API call failed (attempt ${attempt + 1}/${config.maxRetries}), retrying...", e)
-                Thread.sleep(config.retryDelay.toMillis())
-            }
+            logger.warn("Failed to fetch VeryPhy API statistics", e)
+            VeryPhyApiStatistics()
+        }
+    }
+    // ========== PRIVATE HELPER METHODS ==========
+
+    private fun validateFile(file: MultipartFile) {
+        if (file.isEmpty) {
+            throw IllegalArgumentException("File cannot be empty")
+        }
+
+        if (file.size > config.maxFileSize) {
+            throw IllegalArgumentException("File size exceeds maximum allowed size: ${config.maxFileSize}")
+        }
+
+        val filename = file.originalFilename ?: ""
+        val extension = filename.substringAfterLast('.', "").lowercase()
+        if (!config.allowedFileTypes.contains(extension)) {
+            throw IllegalArgumentException("File type not allowed. Supported types: ${config.allowedFileTypes}")
         }
     }
 
-    throw VeryPhyApiException("VeryPhy API call failed after ${config.maxRetries} attempts", lastException)
+    private fun createHeaders(): HttpHeaders {
+        return HttpHeaders().apply {
+            contentType = MediaType.MULTIPART_FORM_DATA
+            set("Authorization", "Bearer ${config.apiKey}")
+            set("User-Agent", "DegreeAttestationGateway/1.0")
+        }
+    }
+
+    private fun createMultipartBody(
+        file: java.nio.file.Path,
+        additionalParams: Map<String, String> = emptyMap()
+    ): MultiValueMap<String, Any> {
+        val body: MultiValueMap<String, Any> = LinkedMultiValueMap()
+        body.add("file", FileSystemResource(file))
+
+        additionalParams.forEach { (key, value) ->
+            body.add(key, value)
+        }
+
+        return body
+    }
+
+    private fun <T> executeWithRetry(operation: () -> ResponseEntity<T>): ResponseEntity<T> {
+        var lastException: Exception? = null
+
+        repeat(config.maxRetries) { attempt ->
+            try {
+                return operation()
+            } catch (e: HttpClientErrorException) {
+                // Don't retry on client errors (4xx)
+                throw VeryPhyApiException("Client error: ${e.statusCode} - ${e.responseBodyAsString}", e)
+            } catch (e: HttpServerErrorException) {
+                // Retry on server errors (5xx)
+                lastException = e
+                if (attempt < config.maxRetries - 1) {
+                    logger.warn("VeryPhy API call failed (attempt ${attempt + 1}/${config.maxRetries}), retrying...", e)
+                    Thread.sleep(config.retryDelay.toMillis())
+                }
+            } catch (e: Exception) {
+                // Retry on network errors
+                lastException = e
+                if (attempt < config.maxRetries - 1) {
+                    logger.warn("VeryPhy API call failed (attempt ${attempt + 1}/${config.maxRetries}), retrying...", e)
+                    Thread.sleep(config.retryDelay.toMillis())
+                }
+            }
+        }
+
+        throw VeryPhyApiException("VeryPhy API call failed after ${config.maxRetries} attempts", lastException)
+    }
 }
-}
+
+
 
 /**
  * Custom exception for VeryPhy API errors

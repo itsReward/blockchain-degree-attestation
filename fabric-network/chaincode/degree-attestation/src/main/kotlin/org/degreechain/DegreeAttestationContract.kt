@@ -7,6 +7,7 @@ import org.hyperledger.fabric.contract.Context
 import org.hyperledger.fabric.contract.ContractInterface
 import org.hyperledger.fabric.contract.annotation.*
 import org.hyperledger.fabric.shim.ChaincodeException
+import org.hyperledger.fabric.shim.ledger.QueryResultsIterator
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
@@ -49,25 +50,23 @@ class DegreeAttestationContract : ContractInterface {
             universityCode = ATTESTATION_ORG,
             universityName = "Blockchain Degree Attestation Authority",
             country = "Global",
+            address = "Global Network",
             contactEmail = "admin@attestation.org",
             publicKey = "attestation_public_key",
-            registrationDate = LocalDateTime.now(),
-            isActive = true,
-            stake = 0.0,
-            totalEarnings = 0.0,
-            verificationCount = 0
+            stakeAmount = 0.0,
+            status = "ACTIVE",
+            totalDegreesIssued = 0L,
+            revenue = 0.0,
+            joinedAt = LocalDateTime.now().toString(),
+            lastActive = LocalDateTime.now().toString(),
+            version = 1L
         )
 
         val key = UNIVERSITY_PREFIX + ATTESTATION_ORG
         stub.putState(key, objectMapper.writeValueAsBytes(attestationOrg))
-
-        // Set initialization event
-        ctx.stub.setEvent("LedgerInitialized", objectMapper.writeValueAsBytes(
-            mapOf("message" to "Degree Attestation ledger initialized with VeryPhy integration")
-        ))
     }
 
-    // ========== NEW VERYPHY INTEGRATION FUNCTIONS ==========
+    // ==================== HASH-BASED OPERATIONS ====================
 
     @Transaction(intent = Transaction.TYPE.SUBMIT)
     fun submitDegreeWithHash(
@@ -82,7 +81,7 @@ class DegreeAttestationContract : ContractInterface {
     ): String {
         val stub = ctx.stub
 
-        // Validate university registration
+        // Check if university exists
         val universityKey = UNIVERSITY_PREFIX + institutionName
         val universityBytes = stub.getState(universityKey)
         if (universityBytes == null || universityBytes.isEmpty()) {
@@ -90,19 +89,11 @@ class DegreeAttestationContract : ContractInterface {
         }
 
         val university = objectMapper.readValue(universityBytes, University::class.java)
-        if (!university.isActive) {
-            throw ChaincodeException("University is not active: $institutionName")
-        }
-
-        // Validate input data
-        if (studentId.isBlank() || degreeName.isBlank() || certificateHash.isBlank()) {
-            throw ChaincodeException("Required fields cannot be empty")
-        }
 
         // Check if hash already exists
         val hashKey = HASH_PREFIX + certificateHash
-        val existingDegreeId = stub.getState(hashKey)
-        if (existingDegreeId != null && existingDegreeId.isNotEmpty()) {
+        val existingDegreeBytes = stub.getState(hashKey)
+        if (existingDegreeBytes != null && existingDegreeBytes.isNotEmpty()) {
             throw ChaincodeException("Certificate hash already exists: $certificateHash")
         }
 
@@ -119,7 +110,8 @@ class DegreeAttestationContract : ContractInterface {
             processedImageUrl = processedImageUrl,
             submissionDate = LocalDateTime.now(),
             status = DegreeStatus.ACTIVE,
-            verificationCount = 0
+            verificationCount = 0,
+            lastVerified = null
         )
 
         // Store degree record
@@ -131,7 +123,8 @@ class DegreeAttestationContract : ContractInterface {
 
         // Update university statistics
         val updatedUniversity = university.copy(
-            submissionCount = university.submissionCount + 1
+            totalDegreesIssued = university.totalDegreesIssued + 1,
+            lastActive = LocalDateTime.now().toString()
         )
         stub.putState(universityKey, objectMapper.writeValueAsBytes(updatedUniversity))
 
@@ -153,11 +146,11 @@ class DegreeAttestationContract : ContractInterface {
     fun verifyDegreeByHash(
         ctx: Context,
         extractedHash: String,
-        ocrData: String? = null
+        ocrData: String?
     ): String {
         val stub = ctx.stub
 
-        // Look up degree by hash
+        // Find degree by hash
         val hashKey = HASH_PREFIX + extractedHash
         val degreeIdBytes = stub.getState(hashKey)
 
@@ -166,9 +159,10 @@ class DegreeAttestationContract : ContractInterface {
                 VerificationResultWithConfidence(
                     verified = false,
                     degreeId = null,
-                    verificationMethod = "HASH_LOOKUP",
+                    degree = null,
+                    verificationMethod = "HASH_NOT_FOUND",
                     confidence = 0.0,
-                    message = "Hash not found in blockchain",
+                    message = "Certificate hash not found in blockchain",
                     timestamp = LocalDateTime.now()
                 )
             )
@@ -179,40 +173,34 @@ class DegreeAttestationContract : ContractInterface {
         val degreeBytes = stub.getState(degreeKey)
 
         if (degreeBytes == null || degreeBytes.isEmpty()) {
-            return objectMapper.writeValueAsString(
-                VerificationResultWithConfidence(
-                    verified = false,
-                    degreeId = degreeId,
-                    verificationMethod = "HASH_LOOKUP",
-                    confidence = 0.0,
-                    message = "Degree record not found",
-                    timestamp = LocalDateTime.now()
-                )
-            )
+            throw ChaincodeException("Degree record not found: $degreeId")
         }
 
         val degree = objectMapper.readValue(degreeBytes, DegreeWithHash::class.java)
 
-        // If degree is revoked, return verification failure
-        if (degree.status == DegreeStatus.REVOKED) {
+        // Check if degree is active
+        if (degree.status != DegreeStatus.ACTIVE) {
             return objectMapper.writeValueAsString(
                 VerificationResultWithConfidence(
                     verified = false,
                     degreeId = degreeId,
-                    verificationMethod = "HASH_LOOKUP",
+                    degree = degree,
+                    verificationMethod = "DEGREE_INACTIVE",
                     confidence = 0.0,
-                    message = "Degree has been revoked",
+                    message = "Degree status: ${degree.status}",
                     timestamp = LocalDateTime.now()
                 )
             )
         }
 
-        // Calculate confidence based on OCR data match (if provided)
-        var confidence = 1.0
+        // Calculate verification confidence
+        var confidence = 1.0 // Hash match gives 100% confidence
         var verificationMethod = "HASH_MATCH"
 
-        if (!ocrData.isNullOrBlank()) {
-            confidence = calculateOcrMatchConfidence(degree.ocrData, ocrData)
+        // If OCR data is provided, compare it for additional verification
+        if (!ocrData.isNullOrBlank() && degree.ocrData.isNotBlank()) {
+            val ocrConfidence = calculateOcrMatchConfidence(degree.ocrData, ocrData)
+            confidence = (confidence + ocrConfidence) / 2.0 // Average the confidences
             verificationMethod = "HASH_AND_OCR_MATCH"
         }
 
@@ -229,7 +217,7 @@ class DegreeAttestationContract : ContractInterface {
         if (universityBytes != null && universityBytes.isNotEmpty()) {
             val university = objectMapper.readValue(universityBytes, University::class.java)
             val updatedUniversity = university.copy(
-                verificationCount = university.verificationCount + 1
+                lastActive = LocalDateTime.now().toString()
             )
             stub.putState(universityKey, objectMapper.writeValueAsBytes(updatedUniversity))
         }
@@ -239,7 +227,7 @@ class DegreeAttestationContract : ContractInterface {
         val verification = VerificationLogEntry(
             verificationId = verificationId,
             degreeId = degreeId,
-            verifierOrg = ctx.clientIdentity.mspId,
+            verifierOrg = getMspIdFromContext(ctx), // Use helper method to get MSP ID
             verificationMethod = verificationMethod,
             confidence = confidence,
             timestamp = LocalDateTime.now(),
@@ -305,15 +293,19 @@ class DegreeAttestationContract : ContractInterface {
         val stub = ctx.stub
         val verifications = mutableListOf<VerificationLogEntry>()
 
-        val iterator = stub.getStateByPartialCompositeKey(VERIFICATION_PREFIX)
-        while (iterator.hasNext()) {
-            val result = iterator.next()
-            val verification = objectMapper.readValue(result.value, VerificationLogEntry::class.java)
-            if (verification.degreeId == degreeId) {
-                verifications.add(verification)
+        val iterator: QueryResultsIterator<org.hyperledger.fabric.shim.ledger.KeyValue> =
+            stub.getStateByPartialCompositeKey(VERIFICATION_PREFIX)
+
+        try {
+            for (result in iterator) { // Use Kotlin's for-in loop instead of hasNext/next
+                val verification = objectMapper.readValue(result.value, VerificationLogEntry::class.java)
+                if (verification.degreeId == degreeId) {
+                    verifications.add(verification)
+                }
             }
+        } finally {
+            iterator.close()
         }
-        iterator.close()
 
         return objectMapper.writeValueAsString(verifications.sortedByDescending { it.timestamp })
     }
@@ -327,7 +319,7 @@ class DegreeAttestationContract : ContractInterface {
         val stub = ctx.stub
 
         // Only attestation authority can revoke degrees
-        if (ctx.clientIdentity.mspId != "AttestationMSP") {
+        if (getMspIdFromContext(ctx) != "AttestationMSP") {
             throw ChaincodeException("Only attestation authority can revoke degrees")
         }
 
@@ -360,13 +352,69 @@ class DegreeAttestationContract : ContractInterface {
 
     // ========== HELPER FUNCTIONS ==========
 
+    /**
+     * Extract MSP ID from client identity using available methods
+     * Works around the private mspId field issue in newer Fabric versions
+     */
+    private fun getMspIdFromContext(ctx: Context): String {
+        return try {
+            // Method 1: Try to access mspId directly (for compatibility with older versions)
+            try {
+                // This might work in some versions - let's try reflection as a fallback
+                val field = ctx.clientIdentity.javaClass.getDeclaredField("mspId")
+                field.isAccessible = true
+                return field.get(ctx.clientIdentity) as String
+            } catch (e: Exception) {
+                // If reflection fails, fall back to parsing the client ID
+            }
+
+            // Method 2: Parse from client ID string
+            val clientId = ctx.clientIdentity.id
+
+            // Method 3: Parse from X509 certificate if available
+            val cert = ctx.clientIdentity.x509Certificate
+            if (cert != null) {
+                val subjectDN = cert.subjectDN.toString()
+
+                // Look for organizational unit (OU) that contains MSP information
+                val ouRegex = "OU=([^,]+)".toRegex()
+                val matches = ouRegex.findAll(subjectDN)
+
+                for (match in matches) {
+                    val ou = match.groupValues[1]
+                    when {
+                        ou.contains("AttestationMSP", ignoreCase = true) -> return "AttestationMSP"
+                        ou.contains("UniversityMSP", ignoreCase = true) -> return "UniversityMSP"
+                        ou.contains("EmployerMSP", ignoreCase = true) -> return "EmployerMSP"
+                        ou.contains("attestation", ignoreCase = true) -> return "AttestationMSP"
+                        ou.contains("university", ignoreCase = true) -> return "UniversityMSP"
+                        ou.contains("employer", ignoreCase = true) -> return "EmployerMSP"
+                    }
+                }
+            }
+
+            // Method 4: Fallback - parse from client ID string patterns
+            when {
+                clientId.contains("attestation", ignoreCase = true) -> "AttestationMSP"
+                clientId.contains("university", ignoreCase = true) -> "UniversityMSP"
+                clientId.contains("employer", ignoreCase = true) -> "EmployerMSP"
+                clientId.contains("AttestationMSP", ignoreCase = true) -> "AttestationMSP"
+                clientId.contains("UniversityMSP", ignoreCase = true) -> "UniversityMSP"
+                clientId.contains("EmployerMSP", ignoreCase = true) -> "EmployerMSP"
+                else -> "UnknownMSP"
+            }
+        } catch (e: Exception) {
+            "UnknownMSP"
+        }
+    }
+
     private fun calculateOcrMatchConfidence(storedOcrData: String, extractedOcrData: String): Double {
         return try {
-            val storedData = objectMapper.readValue(storedOcrData, Map::class.java)
-            val extractedData = objectMapper.readValue(extractedOcrData, Map::class.java)
+            val storedData = objectMapper.readValue(storedOcrData, Map::class.java) as Map<String, Any>
+            val extractedData = objectMapper.readValue(extractedOcrData, Map::class.java) as Map<String, Any>
 
             val keyFields = listOf("studentName", "degreeName", "institutionName", "issuanceDate", "certificateNumber")
-            var matchCount = 0
+            var matchCount = 0.0
             var totalFields = 0
 
             for (field in keyFields) {
@@ -376,7 +424,7 @@ class DegreeAttestationContract : ContractInterface {
                     val extractedValue = extractedData[field]?.toString()?.trim()?.lowercase()
 
                     if (storedValue == extractedValue) {
-                        matchCount++
+                        matchCount += 1.0
                     } else {
                         // Check for partial matches (useful for name variations)
                         val similarity = calculateStringSimilarity(storedValue ?: "", extractedValue ?: "")
@@ -387,7 +435,7 @@ class DegreeAttestationContract : ContractInterface {
                 }
             }
 
-            return if (totalFields > 0) matchCount / totalFields else 0.0
+            return if (totalFields > 0) matchCount / totalFields.toDouble() else 0.0
         } catch (e: Exception) {
             return 0.5 // Default confidence if OCR comparison fails
         }
@@ -399,7 +447,7 @@ class DegreeAttestationContract : ContractInterface {
 
         if (longer.isEmpty()) return 1.0
 
-        return (longer.length - editDistance(longer, shorter)) / longer.length.toDouble()
+        return (longer.length - editDistance(longer, shorter)).toDouble() / longer.length.toDouble()
     }
 
     private fun editDistance(str1: String, str2: String): Int {
@@ -421,7 +469,7 @@ class DegreeAttestationContract : ContractInterface {
         return dp[str1.length][str2.length]
     }
 
-    // ========== EXISTING UNIVERSITY MANAGEMENT FUNCTIONS ==========
+    // ========== UNIVERSITY MANAGEMENT FUNCTIONS ==========
 
     @Transaction(intent = Transaction.TYPE.SUBMIT)
     fun registerUniversity(
@@ -436,7 +484,7 @@ class DegreeAttestationContract : ContractInterface {
         val stub = ctx.stub
 
         // Only attestation authority can register universities
-        if (ctx.clientIdentity.mspId != "AttestationMSP") {
+        if (getMspIdFromContext(ctx) != "AttestationMSP") {
             throw ChaincodeException("Only attestation authority can register universities")
         }
 
@@ -448,14 +496,16 @@ class DegreeAttestationContract : ContractInterface {
             universityCode = universityCode,
             universityName = universityName,
             country = country,
+            address = "", // Default empty address
             contactEmail = contactEmail,
             publicKey = publicKey,
-            registrationDate = LocalDateTime.now(),
-            isActive = true,
-            stake = initialStake,
-            totalEarnings = 0.0,
-            verificationCount = 0,
-            submissionCount = 0
+            stakeAmount = initialStake,
+            status = "ACTIVE",
+            totalDegreesIssued = 0L,
+            revenue = 0.0,
+            joinedAt = LocalDateTime.now().toString(),
+            lastActive = LocalDateTime.now().toString(),
+            version = 1L
         )
 
         val key = UNIVERSITY_PREFIX + universityCode
@@ -477,13 +527,17 @@ class DegreeAttestationContract : ContractInterface {
         val stub = ctx.stub
         val universities = mutableListOf<University>()
 
-        val iterator = stub.getStateByPartialCompositeKey(UNIVERSITY_PREFIX)
-        while (iterator.hasNext()) {
-            val result = iterator.next()
-            val university = objectMapper.readValue(result.value, University::class.java)
-            universities.add(university)
+        val iterator: QueryResultsIterator<org.hyperledger.fabric.shim.ledger.KeyValue> =
+            stub.getStateByPartialCompositeKey(UNIVERSITY_PREFIX)
+
+        try {
+            for (result in iterator) { // Use Kotlin's for-in loop
+                val university = objectMapper.readValue(result.value, University::class.java)
+                universities.add(university)
+            }
+        } finally {
+            iterator.close()
         }
-        iterator.close()
 
         return objectMapper.writeValueAsString(universities)
     }

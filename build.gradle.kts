@@ -35,6 +35,8 @@ subprojects {
         // Testing
         testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
         testImplementation("org.junit.jupiter:junit-jupiter")
+
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     }
 
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {

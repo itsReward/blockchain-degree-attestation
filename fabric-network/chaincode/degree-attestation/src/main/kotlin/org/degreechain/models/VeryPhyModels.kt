@@ -2,27 +2,11 @@ package org.degreechain.models
 
 import java.time.LocalDateTime
 
-/**
- * Enhanced degree model with VeryPhy integration fields
- */
-data class DegreeWithHash(
-    val degreeId: String,
-    val studentId: String,
-    val degreeName: String,
-    val institutionName: String,
-    val issuanceDate: LocalDateTime,
-    val certificateHash: String,
-    val ocrData: String,
-    val processedImageUrl: String,
-    val submissionDate: LocalDateTime,
-    val status: DegreeStatus,
-    val verificationCount: Int = 0,
-    val lastVerified: LocalDateTime? = null
-)
 
 /**
  * Verification result with confidence scoring
  */
+/*
 data class VerificationResultWithConfidence(
     val verified: Boolean,
     val degreeId: String?,
@@ -32,11 +16,12 @@ data class VerificationResultWithConfidence(
     val message: String,
     val timestamp: LocalDateTime
 )
+*/
 
 /**
  * Verification log entry for audit trail
  */
-data class VerificationLogEntry(
+/*data class VerificationLogEntry(
     val verificationId: String,
     val degreeId: String,
     val verifierOrg: String,
@@ -44,12 +29,12 @@ data class VerificationLogEntry(
     val confidence: Double,
     val timestamp: LocalDateTime,
     val extractedHash: String
-)
+)*/
 
 /**
  * Enhanced university model with submission tracking
  */
-data class University(
+/*data class University(
     val universityCode: String,
     val universityName: String,
     val country: String,
@@ -61,16 +46,9 @@ data class University(
     val totalEarnings: Double,
     val verificationCount: Int,
     val submissionCount: Int = 0
-)
+)*/
 
-/**
- * Degree status enumeration
- */
-enum class DegreeStatus {
-    ACTIVE,
-    REVOKED,
-    SUSPENDED
-}
+
 
 /**
  * Verification request model

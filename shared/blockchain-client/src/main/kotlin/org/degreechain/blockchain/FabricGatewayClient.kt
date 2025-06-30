@@ -1,6 +1,7 @@
 // shared/blockchain-client/src/main/kotlin/org/degreechain/blockchain/FabricGatewayClient.kt
 package org.degreechain.blockchain
 
+import com.google.common.graph.Network
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging

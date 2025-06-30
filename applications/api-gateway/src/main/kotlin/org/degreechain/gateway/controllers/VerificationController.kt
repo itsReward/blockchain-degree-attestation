@@ -49,7 +49,7 @@ class VerificationController(
             // Validate file
             val fileValidation = FileUtils.validateCertificateFile(certificateFile)
             if (!fileValidation.isValid) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<EnhancedVerificationResult>(
                     "File validation failed: ${fileValidation.message}",
                     "INVALID_FILE"
                 )
@@ -94,8 +94,9 @@ class VerificationController(
             logger.info("Extracting data from certificate: ${certificateFile.originalFilename}")
 
             val fileValidation = FileUtils.validateCertificateFile(certificateFile)
+
             if (!fileValidation.isValid) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<VerificationExtractionResponse>(
                     "File validation failed: ${fileValidation.message}",
                     "INVALID_FILE"
                 )
@@ -107,7 +108,7 @@ class VerificationController(
             )
 
             logger.info("Data extraction completed. Hash: ${result.hash}, Confidence: ${result.confidence}")
-            ApiUtils.createSuccessResponse(result)
+            return ApiUtils.createSuccessResponse(result)
 
         } catch (e: Exception) {
             logger.error("Error extracting certificate data", e)
@@ -133,7 +134,7 @@ class VerificationController(
             logger.info("Processing batch verification from IP: $clientIp, Files: ${files.size}, Org: $verifierOrganization")
 
             if (files.size > 20) { // Reasonable batch limit for verification
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<BatchVerificationResult>(
                     "Batch size too large. Maximum 20 files allowed for verification",
                     "BATCH_TOO_LARGE"
                 )
@@ -143,7 +144,7 @@ class VerificationController(
             files.forEachIndexed { index, file ->
                 val validation = FileUtils.validateCertificateFile(file)
                 if (!validation.isValid) {
-                    return ApiUtils.createErrorResponse(
+                    return ApiUtils.createErrorResponse<BatchVerificationResult>(
                         "File ${index + 1} validation failed: ${validation.message}",
                         "INVALID_FILE_IN_BATCH"
                     )
@@ -298,7 +299,7 @@ class VerificationController(
 
             val fileValidation = FileUtils.validateCertificateFile(certificateFile)
             if (!fileValidation.isValid) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<CertificateComparisonResult>(
                     "File validation failed: ${fileValidation.message}",
                     "INVALID_FILE"
                 )
@@ -309,7 +310,7 @@ class VerificationController(
             val extractedData = extractionResult.certificateData
 
             if (extractedData == null) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<CertificateComparisonResult>(
                     "Failed to extract data from certificate",
                     "EXTRACTION_FAILED"
                 )

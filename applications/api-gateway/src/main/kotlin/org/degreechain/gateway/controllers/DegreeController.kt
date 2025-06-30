@@ -57,7 +57,7 @@ class DegreeController(
             // Validate file
             val fileValidation = FileUtils.validateCertificateFile(certificateFile)
             if (!fileValidation.isValid) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<EnhancedDegreeSubmissionResult>(
                     "File validation failed: ${fileValidation.message}",
                     "INVALID_FILE"
                 )
@@ -150,14 +150,14 @@ class DegreeController(
             logger.info("Processing batch submission from IP: $clientIp, Files: ${files.size}")
 
             if (files.size != requests.size) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<BatchVerificationResult>(
                     "Number of files (${files.size}) must match number of requests (${requests.size})",
                     "BATCH_SIZE_MISMATCH"
                 )
             }
 
             if (files.size > 50) { // Reasonable batch limit
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<BatchVerificationResult>(
                     "Batch size too large. Maximum 50 files allowed",
                     "BATCH_TOO_LARGE"
                 )
@@ -167,7 +167,7 @@ class DegreeController(
             files.forEachIndexed { index, file ->
                 val validation = FileUtils.validateCertificateFile(file)
                 if (!validation.isValid) {
-                    return ApiUtils.createErrorResponse(
+                    return ApiUtils.createErrorResponse<BatchVerificationResult>(
                         "File ${index + 1} validation failed: ${validation.message}",
                         "INVALID_FILE_IN_BATCH"
                     )
@@ -208,7 +208,7 @@ class DegreeController(
 
             val fileValidation = FileUtils.validateCertificateFile(certificateFile)
             if (!fileValidation.isValid) {
-                return ApiUtils.createErrorResponse(
+                return ApiUtils.createErrorResponse<ProcessedCertificateResponse>(
                     "File validation failed: ${fileValidation.message}",
                     "INVALID_FILE"
                 )
@@ -237,7 +237,7 @@ class DegreeController(
     @PreAuthorize("hasRole('UNIVERSITY') or hasRole('EMPLOYER') or hasRole('ADMIN')")
     fun getDegree(
         @PathVariable degreeId: String
-    ): ResponseEntity<ApiResponse<Any>> {
+    ): ResponseEntity<out ApiResponse<out Map<String, String>>> {
         return try {
             logger.info("Retrieving degree: $degreeId")
 
@@ -264,7 +264,7 @@ class DegreeController(
     @PreAuthorize("hasRole('UNIVERSITY') or hasRole('EMPLOYER') or hasRole('ADMIN')")
     fun getDegreeByHash(
         @PathVariable certificateHash: String
-    ): ResponseEntity<ApiResponse<Any>> {
+    ): ResponseEntity<out ApiResponse<out Map<String, Any>>> {
         return try {
             logger.info("Retrieving degree by hash: $certificateHash")
 
@@ -304,7 +304,7 @@ class DegreeController(
         } catch (e: Exception) {
             logger.error("Error checking VeryPhy health", e)
             ApiUtils.createErrorResponse("Health check failed: ${e.message}", "HEALTH_CHECK_ERROR")
-        }
+        } as ResponseEntity<ApiResponse<VeryPhyHealthStatus>>
     }
 
     /**
